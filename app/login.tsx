@@ -3,6 +3,7 @@ import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { supabase } from '@/lib/supabase';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Lock, Loader2, User } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
@@ -46,6 +47,10 @@ export default function LoginPage() {
       if (!data) {
         throw new Error('Username atau password salah.');
       }
+
+      // Store the user ID in AsyncStorage to persist the session.
+      // We convert it to String to avoid "java.lang.Double cannot be cast to java.lang.String" on Android
+      await AsyncStorage.setItem('user_session', String(data.id));
 
       // On successful login, navigate to the main app screen.
       router.replace('/(tabs)');
