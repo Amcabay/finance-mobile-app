@@ -18,30 +18,41 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-export default function LoginScreen() {
+export default function RegisterScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [rememberMe, setRememberMe] = useState(false);
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [loading, setLoading] = useState(false);
 
   const handleAuth = async () => {
-    if (!email || !password) {
+    if (!email || !password || !confirmPassword) {
       Alert.alert('Error', 'Please fill in all required fields');
+      return;
+    }
+
+    if (password !== confirmPassword) {
+      Alert.alert('Error', 'Passwords do not match');
       return;
     }
 
     setLoading(true);
 
     try {
-      const { error: loginError } = await supabase.auth.signInWithPassword({
+      const { data, error: regError } = await supabase.auth.signUp({
         email,
         password,
       });
+
+      if (regError) throw regError;
       
-      if (loginError) throw new Error('Invalid email or password');
+      if (data.user && data.session) {
+        Alert.alert('Success', 'Account created and logged in!');
+      } else if (data.user) {
+        Alert.alert('Success', 'Check your email for confirmation link!');
+      }
     } catch (err: any) {
       Alert.alert('Error', err.message);
     } finally {
@@ -110,24 +121,19 @@ export default function LoginScreen() {
                   </View>
                 </View>
 
-                {/* Extras (Remember me & Forgot Password) */}
-                <View style={styles.extrasRow}>
-                  <TouchableOpacity
-                    style={styles.checkboxContainer}
-                    activeOpacity={0.7}
-                    onPress={() => setRememberMe(!rememberMe)}
-                  >
-                    <View style={[styles.checkbox, rememberMe && styles.checkboxChecked]}>
-                      {rememberMe && <Ionicons name="checkmark" size={12} color="#ffffff" />}
-                    </View>
-                    <Text style={styles.checkboxLabel}>Remember me</Text>
-                  </TouchableOpacity>
-
-                  <Link href={"/(auth)/forgot-password" as any} asChild>
-                    <TouchableOpacity activeOpacity={0.7}>
-                      <Text style={styles.forgotPasswordText}>Forgot Password?</Text>
-                    </TouchableOpacity>
-                  </Link>
+                <View style={styles.inputGroup}>
+                  <Text style={styles.label}>Confirm Password</Text>
+                  <View style={styles.inputWrapper}>
+                    <Ionicons name="lock-closed-outline" size={20} color="#8e8e93" style={styles.inputIcon} />
+                    <TextInput
+                      style={styles.input}
+                      placeholder="Confirm your password..."
+                      placeholderTextColor="#444446"
+                      value={confirmPassword}
+                      onChangeText={setConfirmPassword}
+                      secureTextEntry
+                    />
+                  </View>
                 </View>
 
                 {/* Primary Action Button */}
@@ -145,16 +151,16 @@ export default function LoginScreen() {
                   {loading ? (
                     <ActivityIndicator color="#ffffff" />
                   ) : (
-                    <Text style={styles.primaryButtonText}>Login</Text>
+                    <Text style={styles.primaryButtonText}>Register</Text>
                   )}
                 </Pressable>
 
                 {/* Bottom Navigation */}
                 <View style={styles.navigationRow}>
-                  <Text style={styles.navigationTextMuted}>Don't have an account? </Text>
-                  <Link href="/(auth)/register" asChild>
+                  <Text style={styles.navigationTextMuted}>Already have an account? </Text>
+                  <Link href="/(auth)/login" asChild>
                     <TouchableOpacity activeOpacity={0.7}>
-                      <Text style={styles.navigationTextPrimary}>Register</Text>
+                      <Text style={styles.navigationTextPrimary}>Login</Text>
                     </TouchableOpacity>
                   </Link>
                 </View>
@@ -252,41 +258,6 @@ const styles = StyleSheet.create({
     fontSize: 16, // typography.body
     fontWeight: '400',
   },
-  extrasRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginTop: 4,
-  },
-  checkboxContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  checkbox: {
-    width: 20,
-    height: 20,
-    borderRadius: 6,
-    borderWidth: 1,
-    borderColor: '#303030', // colors.border-field
-    backgroundColor: '#16161a', // colors.input-bg
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 8,
-  },
-  checkboxChecked: {
-    backgroundColor: '#3897f0', // colors.primary
-    borderColor: '#3897f0',
-  },
-  checkboxLabel: {
-    fontSize: 14,
-    fontWeight: '400',
-    color: '#8e8e93', // colors.text-muted
-  },
-  forgotPasswordText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#3897f0', // colors.primary
-  },
   primaryButton: {
     height: 52,
     borderRadius: 9999, // rounded.pill
@@ -326,5 +297,3 @@ const styles = StyleSheet.create({
     lineHeight: 16,
   },
 });
-
-
