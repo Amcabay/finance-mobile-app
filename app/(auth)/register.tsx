@@ -1,6 +1,6 @@
 import { supabase } from '@/utils/supabase';
 import { Ionicons } from '@expo/vector-icons';
-import { Link, Stack, useRouter } from 'expo-router';
+import { Stack, useRouter } from 'expo-router';
 import React, { useState } from 'react';
 import {
   ActivityIndicator,
@@ -27,9 +27,9 @@ export default function RegisterScreen() {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const handleAuth = async () => {
+  const handleRegister = async () => {
     if (!email || !password || !confirmPassword) {
-      Alert.alert('Error', 'Please fill in all required fields');
+      Alert.alert('Error', 'Please fill in all fields');
       return;
     }
 
@@ -145,7 +145,7 @@ export default function RegisterScreen() {
                       transform: [{ scale: pressed ? 0.96 : 1 }],
                     }
                   ]}
-                  onPress={handleAuth}
+                  onPress={handleRegister}
                   disabled={loading}
                 >
                   {loading ? (
@@ -158,11 +158,12 @@ export default function RegisterScreen() {
                 {/* Bottom Navigation */}
                 <View style={styles.navigationRow}>
                   <Text style={styles.navigationTextMuted}>Already have an account? </Text>
-                  <Link href="/(auth)/login" asChild>
-                    <TouchableOpacity activeOpacity={0.7}>
-                      <Text style={styles.navigationTextPrimary}>Login</Text>
-                    </TouchableOpacity>
-                  </Link>
+                  <TouchableOpacity 
+                    activeOpacity={0.7} 
+                    onPress={() => router.push('/login' as any)}
+                  >
+                    <Text style={styles.navigationTextPrimary}>Login</Text>
+                  </TouchableOpacity>
                 </View>
               </View>
             </View>

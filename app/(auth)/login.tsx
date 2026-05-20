@@ -1,6 +1,6 @@
 import { supabase } from '@/utils/supabase';
 import { Ionicons } from '@expo/vector-icons';
-import { Link, Stack, useRouter } from 'expo-router';
+import { Stack, useRouter } from 'expo-router';
 import React, { useState } from 'react';
 import {
   ActivityIndicator,
@@ -27,9 +27,9 @@ export default function LoginScreen() {
   const [rememberMe, setRememberMe] = useState(false);
   const [loading, setLoading] = useState(false);
 
-  const handleAuth = async () => {
+  const handleLogin = async () => {
     if (!email || !password) {
-      Alert.alert('Error', 'Please fill in all required fields');
+      Alert.alert('Error', 'Please fill in all fields');
       return;
     }
 
@@ -123,11 +123,12 @@ export default function LoginScreen() {
                     <Text style={styles.checkboxLabel}>Remember me</Text>
                   </TouchableOpacity>
 
-                  <Link href={"/(auth)/forgot-password" as any} asChild>
-                    <TouchableOpacity activeOpacity={0.7}>
-                      <Text style={styles.forgotPasswordText}>Forgot Password?</Text>
-                    </TouchableOpacity>
-                  </Link>
+                  <TouchableOpacity 
+                    activeOpacity={0.7} 
+                    onPress={() => router.push('/(auth)/forgot-password' as any)}
+                  >
+                    <Text style={styles.forgotPasswordText}>Forgot Password?</Text>
+                  </TouchableOpacity>
                 </View>
 
                 {/* Primary Action Button */}
@@ -139,7 +140,7 @@ export default function LoginScreen() {
                       transform: [{ scale: pressed ? 0.96 : 1 }],
                     }
                   ]}
-                  onPress={handleAuth}
+                  onPress={handleLogin}
                   disabled={loading}
                 >
                   {loading ? (
@@ -152,11 +153,12 @@ export default function LoginScreen() {
                 {/* Bottom Navigation */}
                 <View style={styles.navigationRow}>
                   <Text style={styles.navigationTextMuted}>Don't have an account? </Text>
-                  <Link href="/(auth)/register" asChild>
-                    <TouchableOpacity activeOpacity={0.7}>
-                      <Text style={styles.navigationTextPrimary}>Register</Text>
-                    </TouchableOpacity>
-                  </Link>
+                  <TouchableOpacity 
+                    activeOpacity={0.7} 
+                    onPress={() => router.push('/register' as any)}
+                  >
+                    <Text style={styles.navigationTextPrimary}>Register</Text>
+                  </TouchableOpacity>
                 </View>
               </View>
             </View>
@@ -326,5 +328,3 @@ const styles = StyleSheet.create({
     lineHeight: 16,
   },
 });
-
-
