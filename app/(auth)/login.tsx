@@ -71,6 +71,11 @@ export default function LoginScreen() {
           >
             {/* Brand Space */}
             <View style={styles.brandContainer}>
+              <Image 
+                source={require('../../assets/images/logo.jpg')} 
+                style={styles.logo} 
+                resizeMode="contain"
+              />
               <Text style={styles.brandTitle}>FinanceFlow</Text>
               <Text style={styles.brandSubtitle}>Premium Asset Management</Text>
             </View>
@@ -127,7 +132,7 @@ export default function LoginScreen() {
                     activeOpacity={0.7} 
                     onPress={() => router.push('/(auth)/forgot-password' as any)}
                   >
-                    <Text style={styles.forgotPasswordText}>Forgot Password?</Text>
+                    <Text style={forgotPasswordText => styles.forgotPasswordText as any}>Forgot Password?</Text>
                   </TouchableOpacity>
                 </View>
 
@@ -197,8 +202,14 @@ const styles = StyleSheet.create({
   },
   brandContainer: {
     alignItems: 'center',
-    marginTop: 60,
-    marginBottom: 40,
+    marginTop: 50,
+    marginBottom: 30,
+  },
+  logo: {
+    width: 80,
+    height: 80,
+    borderRadius: 20,
+    marginBottom: 16,
   },
   brandTitle: {
     fontSize: 32, // typography.display-hero size

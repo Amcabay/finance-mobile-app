@@ -1,35 +1,153 @@
+import { Feather, Ionicons } from '@expo/vector-icons';
+import { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { Tabs } from 'expo-router';
 import React from 'react';
+import { Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
-import { HapticTab } from '@/components/haptic-tab';
-import { IconSymbol } from '@/components/ui/icon-symbol';
-import { Colors } from '@/constants/theme';
-import { useColorScheme } from '@/hooks/use-color-scheme';
+const TAB_INFO: Record<string, { label: string; renderIcon: (color: string, size: number) => React.ReactNode }> = {
+  index: {
+    label: 'Home',
+    renderIcon: (color, size) => <Feather name="home" size={size} color={color} strokeWidth={2.5} />,
+  },
+  spends: {
+    label: 'Spends',
+    renderIcon: (color, size) => <Ionicons name="swap-horizontal" size={size + 2} color={color} />,
+  },
+  schedules: {
+    label: 'Schedules',
+    renderIcon: (color, size) => <Feather name="calendar" size={size} color={color} strokeWidth={2.5} />,
+  },
+  bills: {
+    label: 'Bills',
+    renderIcon: (color, size) => <Ionicons name="card-outline" size={size + 2} color={color} />,
+  },
+};
+
+function CustomTabBar({ state, descriptors, navigation }: BottomTabBarProps) {
+  return (
+    <View style={styles.tabBarContainer}>
+      {state.routes.map((route, index) => {
+        const options = descriptors[route.key].options as any;
+        const isFocused = state.index === index;
+
+        const info = TAB_INFO[route.name];
+        if (!info) return null;
+
+        const onPress = () => {
+          const event = navigation.emit({
+            type: 'tabPress',
+            target: route.key,
+            canPreventDefault: true,
+          });
+
+          if (!isFocused && !event.defaultPrevented) {
+            navigation.navigate(route.name);
+          }
+        };
+
+        const onLongPress = () => {
+          navigation.emit({
+            type: 'tabLongPress',
+            target: route.key,
+          });
+        };
+
+        return (
+          <TouchableOpacity
+            key={route.key}
+            accessibilityRole="button"
+            accessibilityState={isFocused ? { selected: true } : {}}
+            accessibilityLabel={options.tabBarAccessibilityLabel}
+            testID={options.tabBarTestID}
+            onPress={onPress}
+            onLongPress={onLongPress}
+            activeOpacity={0.85}
+          >
+            {isFocused ? (
+              <View style={styles.activePill}>
+                {info.renderIcon('#333D53', 16)}
+                <Text style={styles.activeLabel}>{info.label}</Text>
+              </View>
+            ) : (
+              <View style={styles.inactiveCircle}>
+                {info.renderIcon('#333D53', 18)}
+              </View>
+            )}
+          </TouchableOpacity>
+        );
+      })}
+    </View>
+  );
+}
 
 export default function TabLayout() {
-  const colorScheme = useColorScheme();
-
   return (
     <Tabs
+      tabBar={(props) => <CustomTabBar {...props} />}
       screenOptions={{
-        tabBarActiveTintColor: Colors[colorScheme ?? 'light'].tint,
         headerShown: false,
-        tabBarButton: HapticTab,
-      }}>
-      <Tabs.Screen
-        name="index"
-        options={{
-          title: 'Dashboard',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="house.fill" color={color} />,
-        }}
-      />
-      <Tabs.Screen
-        name="explore"
-        options={{
-          title: 'Transactions',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="list.bullet" color={color} />,
-        }}
-      />
+      }}
+    >
+      <Tabs.Screen name="index" options={{ title: 'Home' }} />
+      <Tabs.Screen name="spends" options={{ title: 'Spends' }} />
+      <Tabs.Screen name="schedules" options={{ title: 'Schedules' }} />
+      <Tabs.Screen name="bills" options={{ title: 'Bills' }} />
     </Tabs>
   );
 }
+
+const styles = StyleSheet.create({
+  tabBarContainer: {
+    position: 'absolute',
+    bottom: 24,
+    width: 327.82, // Sesuai spesifikasi mutlak Anda
+    height: 60,    // Dipangkas dari 72px ke 60px agar lebih slim
+    borderRadius: 24,
+    backgroundColor: '#F3F4F9',
+    borderWidth: 1,
+    borderColor: '#E7EAF3',
+    flexDirection: 'row',
+    justifyContent: 'center', // Mengunci posisi ke tengah
+    alignItems: 'center',
+    alignSelf: 'center',       // Memastikan container utama tetap berada di as tengah layar HP
+    gap: 14,                  // Mengunci jarak antar page pas 14px!
+    ...Platform.select({
+      ios: {
+        shadowColor: '#333D53',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.05,
+        shadowRadius: 8,
+      },
+      android: {
+        elevation: 4,
+      },
+    }),
+  },
+  activePill: {
+    width: 113,      // Dimensi ketika tombol dipilih
+    height: 45,
+    borderRadius: 22.5, // Perfect Pill capsule (Setengah dari tinggi 45px)
+    backgroundColor: '#F2F5FF',
+    borderWidth: 0.5,
+    borderColor: '#333D53',
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 6,
+  },
+  activeLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#333D53',
+  },
+  inactiveCircle: {
+    width: 46,       // Dimensi ketika tombol tidak dipilih
+    height: 46,
+    borderRadius: 23,   // Lingkaran bulat sempurna (Setengah dari 46px)
+    backgroundColor: '#F3F4F9',
+    borderWidth: 0.5,
+    borderColor: '#9EB3CD',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+});

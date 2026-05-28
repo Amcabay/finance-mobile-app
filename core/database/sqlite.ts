@@ -47,5 +47,16 @@ export async function initDatabase(): Promise<void> {
       end_date TEXT,
       sync_status TEXT NOT NULL DEFAULT 'pending'
     );
+
+    CREATE TABLE IF NOT EXISTS transactions (
+      id TEXT PRIMARY KEY NOT NULL,
+      user_id TEXT NOT NULL,
+      description TEXT NOT NULL,
+      amount REAL NOT NULL,
+      category TEXT NOT NULL,
+      type TEXT NOT NULL,
+      date TEXT NOT NULL,
+      sync_status TEXT NOT NULL DEFAULT 'pending'
+    );
   `);
 }

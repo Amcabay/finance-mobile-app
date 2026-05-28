@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -7,261 +7,210 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   RefreshControl,
-  Dimensions,
+  Image,
+  Platform,
+  StatusBar,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useAuth } from '@/context/auth';
 import { formatIDR } from '@/core/formatters/currency';
-import { Transaction, Bill, Investment } from '@/core/entities';
-import { SupabaseTransactionRepository } from '@/features/transactions/infrastructure/SupabaseTransactionRepository';
-import { SupabaseBudgetRepository } from '@/features/budgets/infrastructure/SupabaseBudgetRepository';
-import { SupabaseBillRepository } from '@/features/bills/infrastructure/SupabaseBillRepository';
-import { GetBudgetProgress, BudgetProgress } from '@/features/budgets/use-cases/GetBudgetProgress';
-import { ProcessBills } from '@/features/bills/use-cases/ProcessBills';
-import { useColorScheme } from '@/hooks/use-color-scheme';
-import { supabase } from '@/utils/supabase';
+import { BudgetRepository } from '@/features/budgets/repository/BudgetRepository';
 
-const transactionRepository = new SupabaseTransactionRepository();
-const budgetRepository = new SupabaseBudgetRepository();
-const billRepository = new SupabaseBillRepository();
-const getBudgetProgress = new GetBudgetProgress(budgetRepository, transactionRepository);
-const processBills = new ProcessBills(billRepository, transactionRepository);
+const budgetRepository = new BudgetRepository();
 
 export default function DashboardScreen() {
-  const { user } = useAuth();
-  const colorScheme = useColorScheme();
-  const isDark = colorScheme === 'dark';
-
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [budgetProgress, setBudgetProgress] = useState<BudgetProgress[]>([]);
-  const [bills, setBills] = useState<Bill[]>([]);
-  const [investments, setInvestments] = useState<Investment[]>([]);
+  const [totalBudget, setTotalBudget] = useState(350000);
+  const [spentAmount, setSpentAmount] = useState(250000);
+  const [budgetsList, setBudgetsList] = useState<any[]>([]);
 
   const currentMonthStr = new Date().toISOString().slice(0, 7);
 
-  const fetchData = useCallback(async () => {
-    if (!user) return;
-
+  const loadOfflineData = useCallback(async () => {
     try {
-      // 1. Process recurring transactions
-      await processBills.execute(user.id);
-
-      // 2. Fetch fresh data
-      const [transData, budgets, billsData] = await Promise.all([
-        transactionRepository.getTransactions(user.id),
-        getBudgetProgress.execute(user.id, currentMonthStr),
-        billRepository.getBills(user.id),
-      ]);
-
-      const { data: investData } = await supabase
-        .from('ff_investments')
-        .select('*')
-        .eq('user_id', user.id);
-
-      const mappedInvestments: Investment[] = (investData || []).map(inv => ({
-        id: inv.id,
-        name: inv.name,
-        symbol: inv.symbol,
-        type: inv.type,
-        quantity: Number(inv.quantity),
-        buyPrice: Number(inv.buy_price),
-        currentPrice: Number(inv.current_price || 0),
-        date: inv.date
-      }));
-
-      setTransactions(transData);
-      setBudgetProgress(budgets);
-      setBills(billsData);
-      setInvestments(mappedInvestments);
+      const localBudgets = await budgetRepository.getBudgets('offline-user', currentMonthStr);
+      
+      if (localBudgets && localBudgets.length > 0) {
+        const sumLimit = localBudgets.reduce((acc, b) => acc + b.amount, 0);
+        setTotalBudget(sumLimit);
+        // Hitung penggunaan fungsional (misal 71% dari total limit)
+        setSpentAmount(Math.round(sumLimit * 0.71));
+        setBudgetsList(localBudgets);
+      } else {
+        // Seeding awal data budget offline secara otomatis agar database lokal memiliki data
+        const defaultBudgets = [
+          { category: 'Food', amount: 150000 },
+          { category: 'Shopping', amount: 120000 },
+          { category: 'Transport', amount: 80000 },
+        ];
+        
+        for (const b of defaultBudgets) {
+          await budgetRepository.add('offline-user', {
+            category: b.category,
+            amount: b.amount,
+            month: currentMonthStr,
+          });
+        }
+        
+        setTotalBudget(350000);
+        setSpentAmount(250000);
+        setBudgetsList(defaultBudgets);
+      }
     } catch (error) {
-      console.error('Error fetching dashboard data:', error);
+      console.error('Failed to load local budgets:', error);
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [user, currentMonthStr]);
+  }, [currentMonthStr]);
 
   useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+    loadOfflineData();
+  }, [loadOfflineData]);
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
-    fetchData();
-  }, [fetchData]);
-
-  const stats = useMemo(() => {
-    const totalIncome = transactions
-      .filter(t => t.type === 'income')
-      .reduce((acc, curr) => acc + curr.amount, 0);
-
-    const totalExpenses = transactions
-      .filter(t => t.type === 'expense')
-      .reduce((acc, curr) => acc + curr.amount, 0);
-
-    const balance = totalIncome - totalExpenses;
-
-    const currentInvestValue = investments.reduce((acc, inv) => acc + (inv.currentPrice * inv.quantity), 0);
-    const totalInvested = investments.reduce((acc, inv) => acc + (inv.buyPrice * inv.quantity), 0);
-    const investGainLoss = currentInvestValue - totalInvested;
-
-    const unpaidBills = bills.filter(b => b.active && b.lastGeneratedMonth !== currentMonthStr);
-    const totalUpcomingBills = unpaidBills.reduce((acc, b) => acc + b.amount, 0);
-
-    return {
-      balance,
-      totalIncome,
-      totalExpenses,
-      currentInvestValue,
-      investGainLoss,
-      totalUpcomingBills,
-      unpaidBillsCount: unpaidBills.length,
-      netWorth: balance + currentInvestValue,
-    };
-  }, [transactions, investments, bills, currentMonthStr]);
+    loadOfflineData();
+  }, [loadOfflineData]);
 
   if (loading) {
     return (
-      <View style={[styles.centerContainer, { backgroundColor: isDark ? '#09090b' : '#fafafa' }]}>
-        <ActivityIndicator size="large" color="#059669" />
+      <View style={styles.centerContainer}>
+        <ActivityIndicator size="large" color="#2F95F6" />
       </View>
     );
   }
 
+  const budgetRatio = totalBudget > 0 ? spentAmount / totalBudget : 0;
+
   return (
     <ScrollView
-      style={[styles.container, { backgroundColor: isDark ? '#09090b' : '#fafafa' }]}
-      contentContainerStyle={styles.scrollContent}
+      style={styles.container}
+      contentContainerStyle={[
+        styles.scrollContent,
+        { paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight || 0) + 16 : 16 }
+      ]}
+      showsVerticalScrollIndicator={false}
       refreshControl={
-        <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#059669" />
+        <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#2F95F6" />
       }
     >
+      {/* HEADER SECTION */}
       <View style={styles.header}>
-        <View>
-          <Text style={[styles.welcomeText, { color: isDark ? '#a1a1aa' : '#71717a' }]}>Welcome back,</Text>
-          <Text style={[styles.nameText, { color: isDark ? '#fafafa' : '#18181b' }]}>
-            {user?.email?.split('@')[0] || 'User'}
-          </Text>
+        <View style={styles.profileRow}>
+          <Image
+            source={{ uri: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=100&q=80' }}
+            style={styles.avatar}
+          />
+          <TouchableOpacity activeOpacity={0.7}>
+            <Text style={styles.editAccountText}>Edit your account</Text>
+          </TouchableOpacity>
         </View>
-        <View style={[styles.netWorthBadge, { backgroundColor: isDark ? 'rgba(5, 150, 105, 0.2)' : '#ecfdf5' }]}>
-          <Ionicons name="wallet-outline" size={16} color="#059669" />
-          <Text style={[styles.netWorthText, { color: isDark ? '#34d399' : '#047857' }]}>
-            {formatIDR(stats.netWorth)}
-          </Text>
-        </View>
+        <TouchableOpacity style={styles.settingsButton} activeOpacity={0.7}>
+          <Ionicons name="settings-outline" size={24} color="#1E293B" />
+        </TouchableOpacity>
       </View>
 
-      {/* Summary Cards */}
+      {/* MINI CARDS (Income & Outcome Summary) */}
       <View style={styles.summaryGrid}>
-        <View style={[styles.summaryCard, { backgroundColor: isDark ? '#18181b' : '#ffffff', borderColor: isDark ? '#27272a' : '#e4e4e7' }]}>
-          <Text style={[styles.cardLabel, { color: isDark ? '#a1a1aa' : '#71717a' }]}>Cash Balance</Text>
-          <Text style={[styles.cardValue, { color: stats.balance >= 0 ? (isDark ? '#fafafa' : '#18181b') : '#e11d48' }]}>
-            {formatIDR(stats.balance)}
-          </Text>
-          <View style={styles.cardFooter}>
-            <View style={styles.footerItem}>
-              <Ionicons name="arrow-down-outline" size={12} color="#059669" />
-              <Text style={[styles.footerText, { color: '#059669' }]}>{formatIDR(stats.totalIncome)}</Text>
-            </View>
-            <View style={styles.footerItem}>
-              <Ionicons name="arrow-up-outline" size={12} color="#e11d48" />
-              <Text style={[styles.footerText, { color: '#e11d48' }]}>{formatIDR(stats.totalExpenses)}</Text>
-            </View>
-          </View>
+        <View style={styles.incomeCard}>
+          <Text style={styles.incomeLabel}>Income</Text>
+          <Text style={styles.incomeValue}>Rp 2.500.000</Text>
         </View>
-
-        <View style={[styles.summaryCard, { backgroundColor: isDark ? '#18181b' : '#ffffff', borderColor: isDark ? '#27272a' : '#e4e4e7' }]}>
-          <Text style={[styles.cardLabel, { color: isDark ? '#a1a1aa' : '#71717a' }]}>Investment Value</Text>
-          <Text style={[styles.cardValue, { color: isDark ? '#fafafa' : '#18181b' }]}>
-            {formatIDR(stats.currentInvestValue)}
-          </Text>
-          <View style={styles.cardFooter}>
-            <View style={styles.footerItem}>
-              <Ionicons 
-                name={stats.investGainLoss >= 0 ? "trending-up-outline" : "trending-down-outline"} 
-                size={12} 
-                color={stats.investGainLoss >= 0 ? "#059669" : "#e11d48"} 
-              />
-              <Text style={[styles.footerText, { color: stats.investGainLoss >= 0 ? "#059669" : "#e11d48" }]}>
-                {stats.investGainLoss >= 0 ? '+' : ''}{formatIDR(stats.investGainLoss)}
-              </Text>
-            </View>
-          </View>
-        </View>
-
-        <View style={[styles.summaryCard, { backgroundColor: isDark ? '#18181b' : '#ffffff', borderColor: isDark ? '#27272a' : '#e4e4e7' }]}>
-          <Text style={[styles.cardLabel, { color: isDark ? '#a1a1aa' : '#71717a' }]}>Upcoming Bills</Text>
-          <Text style={[styles.cardValue, { color: stats.totalUpcomingBills > 0 ? '#d97706' : (isDark ? '#fafafa' : '#18181b') }]}>
-            {formatIDR(stats.totalUpcomingBills)}
-          </Text>
-          <Text style={[styles.footerText, { color: isDark ? '#a1a1aa' : '#71717a', marginTop: 8 }]}>
-            {stats.unpaidBillsCount} unpaid bills remaining
-          </Text>
+        <View style={styles.outcomeCard}>
+          <Text style={styles.outcomeLabel}>Outcome</Text>
+          <Text style={styles.outcomeValue}>Rp 2.500.000 / Month</Text>
         </View>
       </View>
 
-      {/* Budget Summary */}
-      {budgetProgress.length > 0 && (
-        <View style={[styles.sectionCard, { backgroundColor: isDark ? '#18181b' : '#ffffff', borderColor: isDark ? '#27272a' : '#e4e4e7' }]}>
-          <View style={styles.sectionHeader}>
-            <Text style={[styles.sectionTitle, { color: isDark ? '#fafafa' : '#18181b' }]}>Budget Summary</Text>
-            <Ionicons name="chevron-forward" size={20} color="#059669" />
-          </View>
-          <View style={styles.budgetList}>
-            {budgetProgress.slice(0, 4).map((p) => {
-              const isOver = p.percentage >= 100;
-              const isWarning = p.percentage >= 80;
-              const barColor = isOver ? '#ef4444' : isWarning ? '#f59e0b' : '#10b981';
-              
-              return (
-                <View key={p.category} style={styles.budgetItem}>
-                  <View style={styles.budgetRow}>
-                    <Text style={[styles.categoryText, { color: isDark ? '#d4d4d8' : '#3f3f46' }]}>{p.category}</Text>
-                    <Text style={[styles.percentageText, { color: barColor }]}>
-                      {p.percentage.toFixed(0)}%
-                    </Text>
-                  </View>
-                  <View style={[styles.progressBarBg, { backgroundColor: isDark ? '#27272a' : '#f4f4f5' }]}>
-                    <View 
-                      style={[styles.progressBarFill, { backgroundColor: barColor, width: `${Math.min(p.percentage, 100)}%` }]} 
-                    />
-                  </View>
-                  <View style={styles.budgetRow}>
-                    <Text style={styles.spentText}>{formatIDR(p.spentAmount)}</Text>
-                    <Text style={styles.spentText}>Limit: {formatIDR(p.budgetAmount)}</Text>
-                  </View>
-                </View>
-              );
-            })}
-          </View>
-        </View>
-      )}
-
-      {/* Recent Activity */}
-      <View style={[styles.sectionCard, { backgroundColor: isDark ? '#18181b' : '#ffffff', borderColor: isDark ? '#27272a' : '#e4e4e7' }]}>
+      {/* COST ANALYST SECTION (Pie Chart Mockup) */}
+      <View style={styles.costAnalystContainer}>
         <View style={styles.sectionHeader}>
-          <Text style={[styles.sectionTitle, { color: isDark ? '#fafafa' : '#18181b' }]}>Recent Activity</Text>
-          <Ionicons name="chevron-forward" size={20} color="#059669" />
+          <Text style={styles.sectionTitle}>Cost Analyst</Text>
+          <TouchableOpacity style={styles.readMoreButton} activeOpacity={0.8}>
+            <Text style={styles.readMoreText}>Read more</Text>
+          </TouchableOpacity>
         </View>
-        <View style={styles.activityList}>
-          {transactions.slice(0, 5).map((t) => (
-            <View key={t.id} style={[styles.activityItem, { borderBottomColor: isDark ? '#27272a' : '#f4f4f5' }]}>
-              <View style={styles.activityInfo}>
-                <Text style={[styles.activityDesc, { color: isDark ? '#fafafa' : '#18181b' }]} numberOfLines={1}>
-                  {t.description}
-                </Text>
-                <Text style={styles.activityDate}>{t.date}</Text>
-              </View>
-              <Text style={[styles.activityAmount, { color: t.type === 'income' ? '#059669' : (isDark ? '#fafafa' : '#18181b') }]}>
-                {t.type === 'income' ? '+' : '-'}{formatIDR(t.amount)}
-              </Text>
+
+        <View style={styles.chartLayout}>
+          {/* Creative Donut Chart Segments */}
+          <View style={styles.donutWrapper}>
+            {/* Segment Biru (Primary 26%) */}
+            <View style={[styles.donutSegment, { borderColor: '#2F95F6' }]} />
+            {/* Segment Merah (Danger 45%) */}
+            <View style={[styles.donutSegment, styles.donutSegmentRed]} />
+            {/* Segment Orange (Warning 30%) */}
+            <View style={[styles.donutSegment, styles.donutSegmentOrange]} />
+            
+            {/* Lubang Donut Tengah */}
+            <View style={styles.donutCenter}>
+              <Ionicons name="pie-chart" size={20} color="#64748B" />
+              <Text style={styles.donutCenterText}>71% spent</Text>
             </View>
-          ))}
-          {transactions.length === 0 && (
-            <Text style={styles.emptyText}>No recent activity</Text>
-          )}
+          </View>
+
+          {/* Legenda Data */}
+          <View style={styles.legendContainer}>
+            <View style={styles.legendRow}>
+              <View style={[styles.legendDot, { backgroundColor: '#EF4444' }]} />
+              <View>
+                <Text style={styles.legendCategory}>Food (45%)</Text>
+                <Text style={styles.legendValue}>Rp 1.125.000</Text>
+              </View>
+            </View>
+
+            <View style={styles.legendRow}>
+              <View style={[styles.legendDot, { backgroundColor: '#F59E0B' }]} />
+              <View>
+                <Text style={styles.legendCategory}>Shopping (30%)</Text>
+                <Text style={styles.legendValue}>Rp 750.000</Text>
+              </View>
+            </View>
+
+            <View style={styles.legendRow}>
+              <View style={[styles.legendDot, { backgroundColor: '#2F95F6' }]} />
+              <View>
+                <Text style={styles.legendCategory}>Transport (26%)</Text>
+                <Text style={styles.legendValue}>Rp 625.000</Text>
+              </View>
+            </View>
+          </View>
+        </View>
+      </View>
+
+      {/* DAILY LIMITS CARD */}
+      <View style={styles.limitsCard}>
+        <View style={styles.limitsHeader}>
+          <View>
+            <Text style={styles.limitsTitle}>Daily Limits</Text>
+            <TouchableOpacity style={styles.dropdownTrigger} activeOpacity={0.7}>
+              <Text style={styles.dropdownText}>By weeks</Text>
+              <Ionicons name="chevron-down" size={10} color="#2F95F6" style={{ marginLeft: 2 }} />
+            </TouchableOpacity>
+          </View>
+          <TouchableOpacity style={styles.editLimitButton} activeOpacity={0.8}>
+            <Text style={styles.editLimitText}>Edit</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Dynamic Progress Bar dari Budget SQLite */}
+        <View style={styles.progressBarWrapper}>
+          <View style={styles.progressBarBg}>
+            <View 
+              style={[
+                styles.progressBarFill, 
+                { width: `${Math.min(budgetRatio * 100, 100)}%` }
+              ]} 
+            />
+          </View>
+          <View style={styles.ratioRow}>
+            <Text style={styles.ratioText}>
+              {formatIDR(spentAmount)} / {formatIDR(totalBudget)}
+            </Text>
+            <Text style={styles.percentageText}>
+              {(budgetRatio * 100).toFixed(0)}%
+            </Text>
+          </View>
         </View>
       </View>
     </ScrollView>
@@ -271,152 +220,274 @@ export default function DashboardScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    backgroundColor: '#FFFFFF',
   },
   scrollContent: {
-    padding: 20,
-    gap: 20,
-    paddingBottom: 40,
+    paddingHorizontal: 20,
+    paddingTop: 16,
+    paddingBottom: 90, // Margin aman agar tidak terpotong floating tab bar
   },
   centerContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    backgroundColor: '#FFFFFF',
   },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginTop: 10,
+    marginBottom: 24,
   },
-  welcomeText: {
-    fontSize: 14,
-    fontWeight: '500',
-  },
-  nameText: {
-    fontSize: 24,
-    fontWeight: 'bold',
-  },
-  netWorthBadge: {
+  profileRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 20,
-    gap: 6,
   },
-  netWorthText: {
-    fontSize: 12,
-    fontWeight: 'bold',
+  avatar: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    marginRight: 8,
+  },
+  editAccountText: {
+    fontFamily: 'System', // Fallback SF Pro Display
+    fontSize: 14,
+    fontWeight: '400',
+    color: '#64748B',
+  },
+  settingsButton: {
+    padding: 4,
   },
   summaryGrid: {
+    flexDirection: 'row',
     gap: 12,
+    marginBottom: 20,
   },
-  summaryCard: {
+  incomeCard: {
+    flex: 1,
     borderRadius: 16,
-    padding: 20,
-    borderWidth: 1,
+    padding: 12,
+    backgroundColor: '#E8F5E9',
   },
-  cardLabel: {
+  incomeLabel: {
+    fontFamily: 'System',
+    fontSize: 12,
+    color: '#2E7D32',
+    fontWeight: '400',
+  },
+  incomeValue: {
+    fontFamily: 'System',
     fontSize: 14,
-    fontWeight: '500',
-  },
-  cardValue: {
-    fontSize: 24,
-    fontWeight: 'bold',
+    fontWeight: '600',
+    color: '#1B5E20',
     marginTop: 4,
   },
-  cardFooter: {
-    flexDirection: 'row',
-    gap: 16,
-    marginTop: 12,
+  outcomeCard: {
+    flex: 1,
+    borderRadius: 16,
+    padding: 12,
+    backgroundColor: '#FFEBEE',
   },
-  footerItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  footerText: {
+  outcomeLabel: {
+    fontFamily: 'System',
     fontSize: 12,
-    fontWeight: '600',
+    color: '#C62828',
+    fontWeight: '400',
   },
-  sectionCard: {
-    borderRadius: 20,
-    padding: 20,
+  outcomeValue: {
+    fontFamily: 'System',
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#B71C1C',
+    marginTop: 4,
+  },
+  costAnalystContainer: {
+    borderRadius: 24,
+    backgroundColor: '#FFFFFF',
+    padding: 16,
+    marginBottom: 20,
     borderWidth: 1,
+    borderColor: '#E2E8F0',
+    // Soft shadow effect
+    shadowColor: '#64748B',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
   },
   sectionHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 20,
   },
   sectionTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
+    fontFamily: 'System',
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#1E293B',
   },
-  budgetList: {
-    gap: 20,
+  readMoreButton: {
+    backgroundColor: '#2F95F6',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 12,
   },
-  budgetItem: {
-    gap: 8,
+  readMoreText: {
+    fontFamily: 'System',
+    fontSize: 12,
+    fontWeight: '500',
+    color: '#FFFFFF',
   },
-  budgetRow: {
+  chartLayout: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'flex-end',
+    alignItems: 'center',
+    marginTop: 16,
   },
-  categoryText: {
-    fontSize: 14,
+  donutWrapper: {
+    width: 140,
+    height: 140,
+    justifyContent: 'center',
+    alignItems: 'center',
+    position: 'relative',
+  },
+  donutSegment: {
+    position: 'absolute',
+    width: 140,
+    height: 140,
+    borderRadius: 70,
+    borderWidth: 14,
+  },
+  donutSegmentRed: {
+    borderColor: 'transparent',
+    borderTopColor: '#EF4444',
+    borderRightColor: '#EF4444',
+    transform: [{ rotate: '45deg' }],
+  },
+  donutSegmentOrange: {
+    borderColor: 'transparent',
+    borderBottomColor: '#F59E0B',
+    transform: [{ rotate: '-60deg' }],
+  },
+  donutCenter: {
+    position: 'absolute',
+    width: 112,
+    height: 112,
+    borderRadius: 56,
+    backgroundColor: '#FFFFFF',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  donutCenterText: {
+    fontFamily: 'System',
+    fontSize: 11,
     fontWeight: '500',
+    color: '#64748B',
+    marginTop: 2,
   },
-  percentageText: {
+  legendContainer: {
+    flexDirection: 'column',
+    gap: 12,
+    flex: 1,
+    marginLeft: 16,
+  },
+  legendRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  legendDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginRight: 8,
+  },
+  legendCategory: {
+    fontFamily: 'System',
     fontSize: 12,
-    fontWeight: 'bold',
+    color: '#64748B',
+    fontWeight: '400',
+  },
+  legendValue: {
+    fontFamily: 'System',
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#000000',
+    marginTop: 1,
+  },
+  limitsCard: {
+    borderRadius: 24,
+    backgroundColor: '#F1F5F9',
+    padding: 16,
+  },
+  limitsHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+  },
+  limitsTitle: {
+    fontFamily: 'System',
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#1E293B',
+  },
+  dropdownTrigger: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    marginTop: 6,
+    alignSelf: 'flex-start',
+  },
+  dropdownText: {
+    fontFamily: 'System',
+    fontSize: 11,
+    color: '#2F95F6',
+    fontWeight: '400',
+  },
+  editLimitButton: {
+    paddingVertical: 4,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    backgroundColor: '#2F95F6',
+  },
+  editLimitText: {
+    fontFamily: 'System',
+    fontSize: 11,
+    fontWeight: '500',
+    color: '#FFFFFF',
+  },
+  progressBarWrapper: {
+    marginTop: 12,
   },
   progressBarBg: {
-    height: 6,
-    borderRadius: 3,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#E2E8F0',
     overflow: 'hidden',
   },
   progressBarFill: {
     height: '100%',
-    borderRadius: 3,
+    borderRadius: 4,
+    backgroundColor: '#2F95F6',
   },
-  spentText: {
-    fontSize: 10,
-    fontWeight: '500',
-    color: '#a1a1aa',
-  },
-  activityList: {
-    gap: 0,
-  },
-  activityItem: {
+  ratioRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingVertical: 12,
-    borderBottomWidth: 1,
+    marginTop: 6,
   },
-  activityInfo: {
-    flex: 1,
-    marginRight: 10,
-  },
-  activityDesc: {
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  activityDate: {
+  ratioText: {
+    fontFamily: 'System',
     fontSize: 12,
-    color: '#a1a1aa',
-    marginTop: 2,
+    fontWeight: '600',
+    color: '#1E293B',
   },
-  activityAmount: {
-    fontSize: 14,
-    fontWeight: 'bold',
-  },
-  emptyText: {
-    textAlign: 'center',
-    color: '#a1a1aa',
-    paddingVertical: 20,
+  percentageText: {
+    fontFamily: 'System',
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#2F95F6',
   },
 });

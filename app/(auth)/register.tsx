@@ -82,6 +82,11 @@ export default function RegisterScreen() {
           >
             {/* Brand Space */}
             <View style={styles.brandContainer}>
+              <Image 
+                source={require('../../assets/images/logo.jpg')} 
+                style={styles.logo} 
+                resizeMode="contain"
+              />
               <Text style={styles.brandTitle}>FinanceFlow</Text>
               <Text style={styles.brandSubtitle}>Premium Asset Management</Text>
             </View>
@@ -202,8 +207,14 @@ const styles = StyleSheet.create({
   },
   brandContainer: {
     alignItems: 'center',
-    marginTop: 60,
-    marginBottom: 40,
+    marginTop: 50,
+    marginBottom: 30,
+  },
+  logo: {
+    width: 80,
+    height: 80,
+    borderRadius: 20,
+    marginBottom: 16,
   },
   brandTitle: {
     fontSize: 32, // typography.display-hero size
