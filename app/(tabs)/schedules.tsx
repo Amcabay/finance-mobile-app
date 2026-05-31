@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import {
   View,
   Text,
@@ -10,179 +10,579 @@ import {
   Alert,
   Platform,
   StatusBar,
+  KeyboardAvoidingView,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { getDatabase } from '@/core/database/sqlite';
 
-interface Event {
+interface Note {
   id: string;
-  date: number; // day of month
   note: string;
-  type: 'Bill' | 'Note';
+  category: 'urgent' | 'reminder' | 'daily';
+  date: string; // Format: YYYY-MM-DD
+  due_date?: string; // Format: YYYY-MM-DD
+  reminder_before?: string;
 }
 
 export default function SchedulesScreen() {
-  const [currentMonth, setCurrentMonth] = useState('June 2026');
-  const [events, setEvents] = useState<Event[]>([
-    { id: '1', date: 15, note: "Buy something for mom's birthday", type: 'Note' },
-    { id: '2', date: 10, note: "Internet Subscription Payment due", type: 'Bill' },
-  ]);
+  // Objek tanggal hari ini (Today) berdasarkan local device time
+  const todayDateObj = useMemo(() => {
+    const now = new Date();
+    return {
+      day: now.getDate(),
+      month: now.getMonth(), // 0-11
+      year: now.getFullYear()
+    };
+  }, []);
+
+  // Melacak bulan & tahun aktif berbasis objek Date
+  const [currentMonth, setCurrentMonth] = useState<Date>(() => {
+    const now = new Date();
+    return new Date(now.getFullYear(), now.getMonth(), 1);
+  });
+
+  const [notes, setNotes] = useState<Note[]>([]);
   const [isAdding, setIsAdding] = useState(false);
+  const [selectedDay, setSelectedDay] = useState<number>(() => new Date().getDate());
+
+  // Input States untuk Notes
   const [newNote, setNewNote] = useState('');
-  const [selectedDay, setSelectedDay] = useState<number>(28); // Today is 28
+  const [noteCategory, setNoteCategory] = useState<'urgent' | 'reminder' | 'daily'>('daily');
+  const [dueDate, setDueDate] = useState(''); // Format: YYYY-MM-DD
+  const [reminderBefore, setReminderBefore] = useState('');
 
-  const daysInMonth = 30; // June has 30 days
-  const startDayOffset = 1; // June 2026 starts on Monday (1 offset if Sunday is 0)
+  // Date Picker Modal States
+  const [isDatePickerOpen, setIsDatePickerOpen] = useState(false);
+  const [pickerMonth, setPickerMonth] = useState<Date>(() => new Date());
 
-  // Generate calendar days
-  const calendarCells = useMemo(() => {
-    const cells = [];
-    // Empty cells for offset
-    for (let i = 0; i < startDayOffset; i++) {
-      cells.push({ day: null, hasEvent: false, eventType: null });
+  // Format estetik untuk tampilan Due Date Capsule (e.g. "29 May 2026")
+  const formattedDueDateDisplay = useMemo(() => {
+    if (!dueDate) return 'Select due date';
+    const parts = dueDate.split('-');
+    if (parts.length !== 3) return dueDate;
+
+    const year = parts[0];
+    const monthIdx = parseInt(parts[1]) - 1;
+    const day = parseInt(parts[2]);
+
+    const monthNames = [
+      'January', 'February', 'March', 'April', 'May', 'June',
+      'July', 'August', 'September', 'October', 'November', 'December'
+    ];
+    const monthName = monthNames[monthIdx] || parts[1];
+    return `${day} ${monthName} ${year}`;
+  }, [dueDate]);
+
+  // Perhitungan kalender mini picker dinamis
+  const pickerDaysInMonth = useMemo(() => {
+    return new Date(pickerMonth.getFullYear(), pickerMonth.getMonth() + 1, 0).getDate();
+  }, [pickerMonth]);
+
+  const pickerStartDayOffset = useMemo(() => {
+    return new Date(pickerMonth.getFullYear(), pickerMonth.getMonth(), 1).getDay();
+  }, [pickerMonth]);
+
+  const pickerCalendarCells = useMemo(() => {
+    const cells: (number | null)[] = [];
+    for (let i = 0; i < pickerStartDayOffset; i++) {
+      cells.push(null);
     }
-    // Days cells
-    for (let day = 1; day <= daysInMonth; day++) {
-      const dayEvents = events.filter(e => e.date === day);
-      cells.push({
-        day,
-        hasEvent: dayEvents.length > 0,
-        eventType: dayEvents.length > 0 ? dayEvents[0].type : null,
-      });
+    for (let day = 1; day <= pickerDaysInMonth; day++) {
+      cells.push(day);
     }
     return cells;
-  }, [events]);
+  }, [pickerDaysInMonth, pickerStartDayOffset]);
 
-  const handleAddEvent = () => {
+  const pickerMonthStr = useMemo(() => {
+    const monthNames = [
+      'January', 'February', 'March', 'April', 'May', 'June',
+      'July', 'August', 'September', 'October', 'November', 'December'
+    ];
+    return `${monthNames[pickerMonth.getMonth()]} ${pickerMonth.getFullYear()}`;
+  }, [pickerMonth]);
+
+  const handlePrevPickerMonth = () => {
+    setPickerMonth(prev => {
+      const newDate = new Date(prev);
+      newDate.setMonth(newDate.getMonth() - 1);
+      return newDate;
+    });
+  };
+
+  const handleNextPickerMonth = () => {
+    setPickerMonth(prev => {
+      const newDate = new Date(prev);
+      newDate.setMonth(newDate.getMonth() + 1);
+      return newDate;
+    });
+  };
+
+  const handleSelectPickerDay = (day: number) => {
+    const monthStr = String(pickerMonth.getMonth() + 1).padStart(2, '0');
+    const dayStr = String(day).padStart(2, '0');
+    const formattedDate = `${pickerMonth.getFullYear()}-${monthStr}-${dayStr}`;
+    setDueDate(formattedDate);
+    setIsDatePickerOpen(false);
+  };
+
+  // Hitung jumlah hari & offset hari pertama dari bulan aktif secara dinamis
+  const daysInMonth = useMemo(() => {
+    return new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 0).getDate();
+  }, [currentMonth]);
+
+  const startDayOffset = useMemo(() => {
+    return new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1).getDay();
+  }, [currentMonth]);
+
+  // Format teks header bulan dinamis (English)
+  const formattedMonthStr = useMemo(() => {
+    const monthNames = [
+      'January', 'February', 'March', 'April', 'May', 'June',
+      'July', 'August', 'September', 'October', 'November', 'December'
+    ];
+    return `${monthNames[currentMonth.getMonth()]} ${currentMonth.getFullYear()}`;
+  }, [currentMonth]);
+
+  // Pola pencarian YYYY-MM untuk SQLite
+  const formattedYearMonth = useMemo(() => {
+    const month = String(currentMonth.getMonth() + 1).padStart(2, '0');
+    return `${currentMonth.getFullYear()}-${month}`;
+  }, [currentMonth]);
+
+  const [dbReady, setDbReady] = useState(false);
+
+  // Memuat data notes secara dinamis dari SQLite berdasarkan bulan aktif
+  const loadOfflineData = useCallback(async () => {
+    try {
+      const db = await getDatabase();
+      const yearMonthPattern = `${formattedYearMonth}-%`;
+
+      // Seed notes default secara aman dengan mengecek keberadaannya satu per satu
+      const defaultNotes = [
+        { id: '1', user_id: 'offline-user', note: "Internet Subscription Payment due", category: 'reminder', date: '2026-06-10', due_date: '2026-06-10', reminder_before: '2 days' },
+        { id: '2', user_id: 'offline-user', note: "Buy something for mom's birthday", category: 'daily', date: '2026-06-15', due_date: '', reminder_before: '' },
+      ];
+      for (const n of defaultNotes) {
+        const row = await db.getAllAsync<any>("SELECT id FROM notes WHERE id = ?", [n.id]);
+        if (!row || row.length === 0) {
+          await db.runAsync(
+            "INSERT INTO notes (id, user_id, note, category, date, due_date, reminder_before) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [n.id, n.user_id, n.note, n.category, n.date, n.due_date, n.reminder_before]
+          );
+        }
+      }
+
+      const rows = await db.getAllAsync<any>(
+        "SELECT * FROM notes WHERE user_id = ? AND date LIKE ? ORDER BY date ASC, id ASC",
+        ['offline-user', yearMonthPattern]
+      );
+
+      if (rows) {
+        setNotes(rows.map(r => ({
+          id: r.id,
+          note: r.note,
+          category: r.category as any,
+          date: r.date,
+          due_date: r.due_date || undefined,
+          reminder_before: r.reminder_before || undefined,
+        })));
+      }
+    } catch (error) {
+      console.error('Failed to load notes:', error);
+    }
+  }, [formattedYearMonth]);
+
+  // Inisialisasi tabel notes di SQLite secara lazily
+  const initNotesTable = useCallback(async () => {
+    try {
+      const db = await getDatabase();
+      await db.execAsync(`
+        CREATE TABLE IF NOT EXISTS notes (
+          id TEXT PRIMARY KEY NOT NULL,
+          user_id TEXT NOT NULL,
+          note TEXT NOT NULL,
+          category TEXT NOT NULL,
+          date TEXT NOT NULL,
+          due_date TEXT,
+          reminder_before TEXT
+        );
+      `);
+      setDbReady(true);
+    } catch (error) {
+      console.error('Failed to initialize notes table:', error);
+    }
+  }, []);
+
+  useEffect(() => {
+    initNotesTable();
+  }, [initNotesTable]);
+
+  // Trigger load kembali setiap kali currentMonth berubah (efek navigasi bulan) atau dbReady berubah
+  useEffect(() => {
+    if (dbReady) {
+      loadOfflineData();
+    }
+  }, [loadOfflineData, dbReady]);
+
+  // Navigasi Bulan Mundur (Kiri)
+  const handlePrevMonth = () => {
+    setCurrentMonth(prev => {
+      const newDate = new Date(prev);
+      newDate.setMonth(newDate.getMonth() - 1);
+      return newDate;
+    });
+    setSelectedDay(1); // Set ke tanggal 1 pada bulan baru
+  };
+
+  // Navigasi Bulan Maju (Kanan)
+  const handleNextMonth = () => {
+    setCurrentMonth(prev => {
+      const newDate = new Date(prev);
+      newDate.setMonth(newDate.getMonth() + 1);
+      return newDate;
+    });
+    setSelectedDay(1); // Set ke tanggal 1 pada bulan baru
+  };
+
+  // Bersihkan input formulir
+  const resetNoteForm = () => {
+    setNewNote('');
+    setNoteCategory('daily');
+    setDueDate('');
+    setReminderBefore('');
+  };
+
+  // Menyimpan note baru ke SQLite
+  const handleAddEvent = async () => {
     if (!newNote.trim()) {
       Alert.alert('Error', 'Please enter your event note');
       return;
     }
 
-    const newEvent: Event = {
-      id: String(Date.now()),
-      date: selectedDay,
-      note: newNote,
-      type: 'Note',
-    };
+    if (noteCategory === 'reminder' && !dueDate.trim()) {
+      Alert.alert('Error', 'Please enter due date');
+      return;
+    }
 
-    setEvents(prev => [...prev, newEvent]);
-    setIsAdding(false);
-    setNewNote('');
+    try {
+      const db = await getDatabase();
+      const dayStr = String(selectedDay).padStart(2, '0');
+      const noteDateStr = `${formattedYearMonth}-${dayStr}`;
+      const newId = String(Date.now());
+      
+      await db.runAsync(
+        `INSERT INTO notes (
+          id, user_id, note, category, date, due_date, reminder_before
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          newId,
+          'offline-user',
+          newNote.trim(),
+          noteCategory,
+          noteDateStr,
+          noteCategory === 'reminder' ? dueDate.trim() : null,
+          noteCategory === 'reminder' ? reminderBefore.trim() : null,
+        ]
+      );
+
+      await loadOfflineData();
+      setIsAdding(false);
+      resetNoteForm();
+    } catch (error) {
+      console.error('Failed to save note:', error);
+      Alert.alert('Error', 'Failed to save note');
+    }
   };
 
+  // Menghapus note dari SQLite
+  const handleDeleteNote = (id: string) => {
+    Alert.alert(
+      'Confirm Delete',
+      'Are you sure you want to delete this schedule?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const db = await getDatabase();
+              await db.runAsync("DELETE FROM notes WHERE id = ?", [id]);
+              await loadOfflineData();
+            } catch (error) {
+              console.error('Failed to delete note:', error);
+              Alert.alert('Error', 'Failed to delete schedule');
+            }
+          }
+        }
+      ]
+    );
+  };
+
+  // Pemetaan cells kalender secara dinamis
+  const calendarCells = useMemo(() => {
+    const cells = [];
+    // Cells kosong di awal (offset hari)
+    for (let i = 0; i < startDayOffset; i++) {
+      cells.push({ day: null, hasEvent: false, eventType: null, fullDate: null });
+    }
+    // Days cells
+    for (let day = 1; day <= daysInMonth; day++) {
+      const dayStr = String(day).padStart(2, '0');
+      const fullDateStr = `${formattedYearMonth}-${dayStr}`;
+      
+      const dayNotes = notes.filter(n => n.date === fullDateStr);
+      
+      // Pilih dot indikator tercabang (urgent diprioritaskan, disusul reminder)
+      let type: 'urgent' | 'reminder' | 'daily' | null = null;
+      if (dayNotes.length > 0) {
+        if (dayNotes.some(n => n.category === 'urgent')) type = 'urgent';
+        else if (dayNotes.some(n => n.category === 'reminder')) type = 'reminder';
+        else type = 'daily';
+      }
+
+      cells.push({
+        day,
+        hasEvent: dayNotes.length > 0,
+        eventType: type,
+        fullDate: fullDateStr
+      });
+    }
+    return cells;
+  }, [notes, daysInMonth, startDayOffset, formattedYearMonth]);
+
+  // Notes yang tersaring untuk tanggal aktif terpilih
   const selectedDayEvents = useMemo(() => {
-    return events.filter(e => e.date === selectedDay);
-  }, [events, selectedDay]);
+    const dayStr = String(selectedDay).padStart(2, '0');
+    const fullDateStr = `${formattedYearMonth}-${dayStr}`;
+    return notes.filter(n => n.date === fullDateStr);
+  }, [notes, selectedDay, formattedYearMonth]);
 
   return (
-    <ScrollView 
-      style={styles.container}
-      contentContainerStyle={[
-        styles.scrollContent,
-        { paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight || 0) + 16 : 16 }
-      ]}
-      showsVerticalScrollIndicator={false}
-    >
-      {/* HEADER BULAN */}
-      <View style={styles.monthHeader}>
-        <TouchableOpacity activeOpacity={0.7}>
-          <Ionicons name="chevron-back" size={20} color="#64748B" />
-        </TouchableOpacity>
-        <Text style={styles.monthTitle}>{currentMonth}</Text>
-        <TouchableOpacity activeOpacity={0.7}>
-          <Ionicons name="chevron-forward" size={20} color="#64748B" />
-        </TouchableOpacity>
-      </View>
-
-      {/* CUSTOM CALENDAR GRID */}
-      <View style={styles.calendarCard}>
-        {/* Grid Header */}
-        <View style={styles.gridHeaderRow}>
-          {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(dayName => (
-            <Text key={dayName} style={styles.gridHeaderCell}>{dayName}</Text>
-          ))}
-        </View>
-
-        {/* Days Cell Grid */}
-        <View style={styles.daysGrid}>
-          {calendarCells.map((cell, idx) => {
-            const isToday = cell.day === selectedDay;
-            return (
-              <TouchableOpacity
-                key={idx}
-                style={styles.dayCellWrapper}
-                activeOpacity={cell.day ? 0.7 : 1}
-                disabled={!cell.day}
-                onPress={() => cell.day && setSelectedDay(cell.day)}
-              >
-                {cell.day ? (
-                  <View style={[styles.dayCell, isToday && styles.todayCell]}>
-                    <Text style={[styles.dayText, isToday && styles.todayText]}>
-                      {cell.day}
-                    </Text>
-                    {cell.hasEvent && !isToday && (
-                      <View style={[
-                        styles.eventIndicator,
-                        cell.eventType === 'Bill' ? styles.eventIndicatorBill : styles.eventIndicatorNote
-                      ]} />
-                    )}
-                  </View>
-                ) : (
-                  <View style={styles.dayCell} />
-                )}
-              </TouchableOpacity>
-            );
-          })}
-        </View>
-      </View>
-
-      {/* SCHEDULES & NOTES SECTION */}
-      <View style={styles.schedulesSection}>
-        <View style={styles.schedulesHeaderRow}>
-          <Text style={styles.schedulesTitle}>Schedules</Text>
-          <TouchableOpacity activeOpacity={0.7} onPress={() => setIsAdding(true)}>
-            <Text style={styles.addScheduleLink}>Tap to add new schedules</Text>
+    <View style={styles.screenWrapper}>
+      <ScrollView 
+        style={styles.container}
+        contentContainerStyle={[
+          styles.scrollContent,
+          { paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight || 0) + 16 : 16 }
+        ]}
+        showsVerticalScrollIndicator={false}
+      >
+        {/* HEADER BULAN DINAMIS DENGAN NAVIGASI */}
+        <View style={styles.monthHeader}>
+          <TouchableOpacity activeOpacity={0.7} onPress={handlePrevMonth} style={styles.arrowButton}>
+            <Ionicons name="chevron-back" size={22} color="#333D53" />
+          </TouchableOpacity>
+          <Text style={styles.monthTitle}>{formattedMonthStr}</Text>
+          <TouchableOpacity activeOpacity={0.7} onPress={handleNextMonth} style={styles.arrowButton}>
+            <Ionicons name="chevron-forward" size={22} color="#333D53" />
           </TouchableOpacity>
         </View>
 
-        {/* Active Schedules Row list */}
-        <View style={styles.eventsList}>
-          {selectedDayEvents.map(e => (
-            <View key={e.id} style={styles.eventRow}>
-              <View style={[
-                styles.eventMarkerBadge, 
-                { backgroundColor: e.type === 'Bill' ? '#F59E0B' : '#2F95F6' }
-              ]}>
-                <Text style={styles.eventMarkerText}>{e.type}</Text>
-              </View>
-              <Text style={styles.eventNoteText}>{e.note}</Text>
-            </View>
-          ))}
+        {/* CUSTOM CALENDAR GRID */}
+        <View style={styles.calendarCard}>
+          {/* Grid Header */}
+          <View style={styles.gridHeaderRow}>
+            {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(dayName => (
+              <Text key={dayName} style={styles.gridHeaderCell}>{dayName}</Text>
+            ))}
+          </View>
 
-          {selectedDayEvents.length === 0 && (
-            <View style={styles.emptyStateCard}>
-              <Text style={styles.emptyStateText}>No Event added</Text>
-            </View>
-          )}
+          {/* Days Cell Grid */}
+          <View style={styles.daysGrid}>
+            {calendarCells.map((cell, idx) => {
+              const isSelected = cell.day === selectedDay;
+              const isActualToday = cell.day === todayDateObj.day &&
+                                    currentMonth.getMonth() === todayDateObj.month &&
+                                    currentMonth.getFullYear() === todayDateObj.year;
+              return (
+                <TouchableOpacity
+                  key={idx}
+                  style={styles.dayCellWrapper}
+                  activeOpacity={cell.day ? 0.7 : 1}
+                  disabled={!cell.day}
+                  onPress={() => cell.day && setSelectedDay(cell.day)}
+                >
+                  {cell.day ? (
+                    <View style={[
+                      styles.dayCell,
+                      isActualToday && styles.actualTodayCell,
+                      isSelected && styles.selectedCell,
+                      (isActualToday && isSelected) && { backgroundColor: '#3A86FF' }
+                    ]}>
+                      <Text style={[
+                        styles.dayText,
+                        isActualToday && styles.actualTodayText,
+                        isSelected && styles.selectedText,
+                        (isActualToday && isSelected) && { color: '#FFFFFF' }
+                      ]}>
+                        {cell.day}
+                      </Text>
+                      {cell.hasEvent && !isSelected && (
+                        <View style={[
+                          styles.eventIndicator,
+                          cell.eventType === 'urgent' && styles.eventIndicatorUrgent,
+                          cell.eventType === 'reminder' && styles.eventIndicatorReminder,
+                          cell.eventType === 'daily' && styles.eventIndicatorDaily,
+                        ]} />
+                      )}
+                    </View>
+                  ) : (
+                    <View style={styles.dayCell} />
+                  )}
+                </TouchableOpacity>
+              );
+            })}
+          </View>
         </View>
-      </View>
+
+        {/* SCHEDULES & NOTES SECTION */}
+        <View style={styles.schedulesSection}>
+          <View style={styles.schedulesHeaderRow}>
+            <Text style={styles.schedulesTitle}>Schedules ({formattedMonthStr} - Day {selectedDay})</Text>
+            <TouchableOpacity activeOpacity={0.7} onPress={() => setIsAdding(true)}>
+              <Text style={styles.addScheduleLink}>Tap to add new schedule</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Active Schedules Row list */}
+          <View style={styles.eventsList}>
+            {selectedDayEvents.map(e => {
+              let badgeBg = '#3A86FF'; // daily (Default)
+              if (e.category === 'urgent') badgeBg = '#EF4444';
+              else if (e.category === 'reminder') badgeBg = '#F59E0B';
+
+              return (
+                <View key={e.id} style={styles.eventRow}>
+                  <View style={[styles.eventMarkerBadge, { backgroundColor: badgeBg }]}>
+                    <Text style={styles.eventMarkerText}>{e.category.toUpperCase()}</Text>
+                  </View>
+                  <View style={styles.eventNoteTextWrapper}>
+                    <Text style={styles.eventNoteText}>{e.note}</Text>
+                    {e.category === 'reminder' && e.due_date && (
+                      <Text style={styles.eventDueText}>
+                        Due: {e.due_date} {e.reminder_before ? `• Alert: ${e.reminder_before} prior` : ''}
+                      </Text>
+                    )}
+                  </View>
+                  {/* Delete button */}
+                  <TouchableOpacity onPress={() => handleDeleteNote(e.id)} style={styles.deleteNoteButton}>
+                    <Ionicons name="trash-outline" size={16} color="#64748B" />
+                  </TouchableOpacity>
+                </View>
+              );
+            })}
+
+            {selectedDayEvents.length === 0 && (
+              <View style={styles.emptyStateCard}>
+                <Text style={styles.emptyStateText}>No schedules for this day</Text>
+              </View>
+            )}
+          </View>
+        </View>
+      </ScrollView>
 
       {/* ADD SCHEDULE MODAL */}
-      <Modal visible={isAdding} animationType="fade" transparent>
+      <Modal visible={isAdding} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Add Schedule for Day {selectedDay}</Text>
-            <TextInput
-              style={styles.modalInput}
-              placeholder="Buy something for mom's birthday..."
-              placeholderTextColor="#94A3B8"
-              value={newNote}
-              onChangeText={setNewNote}
-            />
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            style={styles.modalContent}
+          >
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Add Schedule for Day {selectedDay}</Text>
+              <TouchableOpacity 
+                onPress={() => {
+                  setIsAdding(false);
+                  resetNoteForm();
+                }}
+                style={styles.closeModalButton}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="close" size={20} color="#333D53" />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.modalFormScroll}>
+              <View style={styles.modalForm}>
+                <Text style={styles.modalSubTitle}>Note Details</Text>
+                <View style={styles.capsuleInputWrapper}>
+                  <TextInput
+                    style={styles.capsuleInput}
+                    placeholder="e.g. Internet Subscription Payment due..."
+                    placeholderTextColor="#94A3B8"
+                    value={newNote}
+                    onChangeText={setNewNote}
+                  />
+                </View>
+
+                {/* Category Selector Chips */}
+                <Text style={styles.modalSubTitle}>Category</Text>
+                <View style={styles.categoryChipsContainer}>
+                  {(['urgent', 'reminder', 'daily'] as const).map(cat => {
+                    const isActive = noteCategory === cat;
+                    let activeColor = '#3A86FF'; // daily
+                    if (cat === 'urgent') activeColor = '#EF4444';
+                    if (cat === 'reminder') activeColor = '#F59E0B';
+                    
+                    return (
+                      <TouchableOpacity
+                        key={cat}
+                        style={[
+                          styles.categoryChip,
+                          isActive && { backgroundColor: activeColor, borderColor: activeColor }
+                        ]}
+                        onPress={() => setNoteCategory(cat)}
+                        activeOpacity={0.7}
+                      >
+                        <Text style={[styles.categoryChipText, isActive && styles.categoryChipTextActive]}>
+                          {cat.toUpperCase()}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+
+                {/* Conditional fields for Reminder category */}
+                {noteCategory === 'reminder' && (
+                  <View style={styles.conditionalFormStack}>
+                    <Text style={styles.modalSubTitle}>Due Date</Text>
+                    <TouchableOpacity 
+                      style={[styles.capsuleInputWrapper, styles.capsuleInputRow]}
+                      activeOpacity={0.7}
+                      onPress={() => {
+                        setPickerMonth(new Date(currentMonth));
+                        setIsDatePickerOpen(true);
+                      }}
+                    >
+                      <Text style={[styles.capsuleInput, !dueDate && { color: '#94A3B8' }]}>
+                        {formattedDueDateDisplay}
+                      </Text>
+                      <Ionicons name="calendar-outline" size={18} color="#64748B" />
+                    </TouchableOpacity>
+
+                    <Text style={styles.modalSubTitle}>Reminder Alert</Text>
+                    <View style={styles.capsuleInputWrapper}>
+                      <TextInput
+                        style={styles.capsuleInput}
+                        placeholder="e.g. 1 day, 2 hours"
+                        placeholderTextColor="#94A3B8"
+                        value={reminderBefore}
+                        onChangeText={setReminderBefore}
+                      />
+                    </View>
+                  </View>
+                )}
+              </View>
+            </ScrollView>
+
             <View style={styles.modalButtonsRow}>
               <TouchableOpacity 
                 style={[styles.modalButton, styles.modalButtonCancel]}
-                onPress={() => setIsAdding(false)}
+                onPress={() => {
+                  setIsAdding(false);
+                  resetNoteForm();
+                }}
               >
                 <Text style={styles.modalButtonCancelText}>Cancel</Text>
               </TouchableOpacity>
@@ -193,14 +593,84 @@ export default function SchedulesScreen() {
                 <Text style={styles.modalButtonConfirmText}>Confirm</Text>
               </TouchableOpacity>
             </View>
+          </KeyboardAvoidingView>
+        </View>
+      </Modal>
+
+      {/* CUSTOM CALENDAR PICKER MODAL */}
+      <Modal visible={isDatePickerOpen} animationType="fade" transparent>
+        <View style={styles.datePickerOverlay}>
+          <View style={styles.datePickerContent}>
+            {/* Header */}
+            <View style={styles.datePickerHeader}>
+              <Text style={styles.datePickerTitle}>Select Due Date</Text>
+              <TouchableOpacity 
+                onPress={() => setIsDatePickerOpen(false)}
+                style={styles.closePickerButton}
+              >
+                <Ionicons name="close" size={18} color="#333D53" />
+              </TouchableOpacity>
+            </View>
+
+            {/* Picker Month Navigation */}
+            <View style={styles.pickerMonthRow}>
+              <TouchableOpacity onPress={handlePrevPickerMonth} style={styles.pickerArrow}>
+                <Ionicons name="chevron-back" size={16} color="#333D53" />
+              </TouchableOpacity>
+              <Text style={styles.pickerMonthTitle}>{pickerMonthStr}</Text>
+              <TouchableOpacity onPress={handleNextPickerMonth} style={styles.pickerArrow}>
+                <Ionicons name="chevron-forward" size={16} color="#333D53" />
+              </TouchableOpacity>
+            </View>
+
+            {/* Calendar Grid */}
+            <View style={styles.pickerGridContainer}>
+              {/* Header Days */}
+              <View style={styles.pickerGridHeader}>
+                {['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'].map(d => (
+                  <Text key={d} style={styles.pickerGridHeaderCell}>{d}</Text>
+                ))}
+              </View>
+
+              {/* Grid Cells */}
+              <View style={styles.pickerDaysGrid}>
+                {pickerCalendarCells.map((day, idx) => {
+                  const isSelected = day ? dueDate === `${pickerMonth.getFullYear()}-${String(pickerMonth.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}` : false;
+
+                  return (
+                    <TouchableOpacity
+                      key={idx}
+                      style={styles.pickerDayCellWrapper}
+                      disabled={!day}
+                      onPress={() => day && handleSelectPickerDay(day)}
+                      activeOpacity={day ? 0.7 : 1}
+                    >
+                      {day ? (
+                        <View style={[styles.pickerDayCell, isSelected && styles.pickerDayCellSelected]}>
+                          <Text style={[styles.pickerDayText, isSelected && styles.pickerDayTextSelected]}>
+                            {day}
+                          </Text>
+                        </View>
+                      ) : (
+                        <View />
+                      )}
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </View>
           </View>
         </View>
       </Modal>
-    </ScrollView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  screenWrapper: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+  },
   container: {
     flex: 1,
     backgroundColor: '#FFFFFF',
@@ -216,11 +686,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginVertical: 16,
   },
+  arrowButton: {
+    padding: 6,
+  },
   monthTitle: {
     fontFamily: 'System',
     fontSize: 18,
     fontWeight: '700',
-    color: '#1E293B',
+    color: '#333D53',
   },
   calendarCard: {
     borderRadius: 20,
@@ -229,7 +702,6 @@ const styles = StyleSheet.create({
     padding: 12,
     backgroundColor: '#FFFFFF',
     marginBottom: 16,
-    // Soft shadow
     shadowColor: '#64748B',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.05,
@@ -268,17 +740,26 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     position: 'relative',
   },
-  todayCell: {
-    backgroundColor: '#2F95F6',
+  actualTodayCell: {
+    backgroundColor: '#3A86FF',
   },
   dayText: {
     fontFamily: 'System',
     fontSize: 13,
-    color: '#1E293B',
+    color: '#333D53',
   },
-  todayText: {
+  actualTodayText: {
     color: '#FFFFFF',
     fontWeight: '700',
+  },
+  selectedCell: {
+    borderWidth: 1.5,
+    borderColor: '#333D53',
+    backgroundColor: '#F2F5FF',
+  },
+  selectedText: {
+    fontWeight: '700',
+    color: '#333D53',
   },
   eventIndicator: {
     position: 'absolute',
@@ -287,10 +768,13 @@ const styles = StyleSheet.create({
     height: 4,
     borderRadius: 2,
   },
-  eventIndicatorBill: {
+  eventIndicatorUrgent: {
+    backgroundColor: '#EF4444',
+  },
+  eventIndicatorReminder: {
     backgroundColor: '#F59E0B',
   },
-  eventIndicatorNote: {
+  eventIndicatorDaily: {
     backgroundColor: '#2F95F6',
   },
   schedulesSection: {
@@ -304,12 +788,12 @@ const styles = StyleSheet.create({
     fontFamily: 'System',
     fontSize: 14,
     fontWeight: '700',
-    color: '#1E293B',
+    color: '#333D53',
   },
   addScheduleLink: {
     fontFamily: 'System',
     fontSize: 12,
-    color: '#2F95F6',
+    color: '#3A86FF',
     textDecorationLine: 'underline',
     marginTop: 4,
   },
@@ -318,36 +802,52 @@ const styles = StyleSheet.create({
   },
   eventRow: {
     borderRadius: 12,
-    backgroundColor: '#F1F5F9',
+    backgroundColor: '#F8F9FC',
     padding: 12,
     flexDirection: 'row',
     alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#EEF1F6',
   },
   eventMarkerBadge: {
-    paddingVertical: 2,
+    paddingVertical: 3,
     paddingHorizontal: 6,
     borderRadius: 4,
     marginRight: 8,
   },
   eventMarkerText: {
     fontFamily: 'System',
-    fontSize: 9,
+    fontSize: 8,
     fontWeight: '700',
     color: '#FFFFFF',
+  },
+  eventNoteTextWrapper: {
+    flex: 1,
   },
   eventNoteText: {
     fontFamily: 'System',
     fontSize: 13,
-    fontWeight: '500',
-    color: '#1E293B',
-    flex: 1,
+    fontWeight: '600',
+    color: '#333D53',
+  },
+  eventDueText: {
+    fontFamily: 'System',
+    fontSize: 10,
+    color: '#64748B',
+    marginTop: 2,
+  },
+  deleteNoteButton: {
+    padding: 6,
+    marginLeft: 6,
   },
   emptyStateCard: {
     borderRadius: 16,
-    backgroundColor: '#F1F5F9',
+    backgroundColor: '#F8F9FC',
     height: 100,
     justifyContent: 'center',
     alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#EEF1F6',
   },
   emptyStateText: {
     fontFamily: 'System',
@@ -356,30 +856,93 @@ const styles = StyleSheet.create({
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20,
+    backgroundColor: 'rgba(0, 0, 0, 0.4)',
+    justifyContent: 'flex-end',
   },
   modalContent: {
-    width: '100%',
     backgroundColor: '#FFFFFF',
-    borderRadius: 20,
-    padding: 20,
-    gap: 16,
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    paddingTop: 20,
+    paddingHorizontal: 20,
+    paddingBottom: Platform.OS === 'ios' ? 44 : 32,
+    maxHeight: '85%',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingBottom: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F5F9',
   },
   modalTitle: {
     fontFamily: 'System',
     fontSize: 16,
     fontWeight: '700',
-    color: '#1E293B',
+    color: '#333D53',
   },
-  modalInput: {
-    height: 44,
-    borderRadius: 12,
+  closeModalButton: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#EEF1F6',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalFormScroll: {
+    paddingVertical: 12,
+  },
+  modalForm: {
+    gap: 12,
+  },
+  modalSubTitle: {
+    fontFamily: 'System',
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#64748B',
+    marginTop: 8,
+  },
+  categoryChipsContainer: {
+    flexDirection: 'row',
+    gap: 8,
+    marginVertical: 4,
+  },
+  categoryChip: {
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 20,
+    backgroundColor: '#EEF1F6',
     borderWidth: 1,
-    borderColor: '#E2E8F0',
-    paddingHorizontal: 12,
+    borderColor: '#EEF1F6',
+  },
+  categoryChipText: {
+    fontFamily: 'System',
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#64748B',
+  },
+  categoryChipTextActive: {
+    color: '#FFFFFF',
+  },
+  conditionalFormStack: {
+    gap: 12,
+    marginTop: 8,
+  },
+  capsuleInputWrapper: {
+    height: 48,
+    borderRadius: 14,
+    backgroundColor: '#EEF1F6',
+    paddingHorizontal: 16,
+    justifyContent: 'center',
+    marginTop: 4,
+  },
+  capsuleInputRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  capsuleInput: {
     fontFamily: 'System',
     fontSize: 13,
     color: '#1E293B',
@@ -387,30 +950,140 @@ const styles = StyleSheet.create({
   modalButtonsRow: {
     flexDirection: 'row',
     gap: 10,
+    marginTop: 16,
   },
   modalButton: {
     flex: 1,
-    height: 40,
-    borderRadius: 12,
+    height: 48,
+    borderRadius: 16,
     justifyContent: 'center',
     alignItems: 'center',
   },
   modalButtonCancel: {
-    backgroundColor: '#F1F5F9',
+    backgroundColor: '#EEF1F6',
   },
   modalButtonCancelText: {
     fontFamily: 'System',
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: '600',
     color: '#64748B',
   },
   modalButtonConfirm: {
-    backgroundColor: '#2F95F6',
+    backgroundColor: '#3A86FF',
   },
   modalButtonConfirmText: {
     fontFamily: 'System',
-    fontSize: 13,
-    fontWeight: '600',
+    fontSize: 14,
+    fontWeight: '700',
     color: '#FFFFFF',
+  },
+
+  // DATE PICKER MODAL STYLES
+  datePickerOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(51, 61, 83, 0.4)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  datePickerContent: {
+    width: '100%',
+    maxWidth: 320,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 24,
+    padding: 20,
+    shadowColor: '#333D53',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.15,
+    shadowRadius: 20,
+    elevation: 8,
+  },
+  datePickerHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#EEF1F6',
+  },
+  datePickerTitle: {
+    fontFamily: 'System',
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#333D53',
+  },
+  closePickerButton: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#EEF1F6',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  pickerMonthRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginVertical: 12,
+  },
+  pickerArrow: {
+    padding: 4,
+  },
+  pickerMonthTitle: {
+    fontFamily: 'System',
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#333D53',
+  },
+  pickerGridContainer: {
+    borderWidth: 1,
+    borderColor: '#EEF1F6',
+    borderRadius: 16,
+    padding: 10,
+    backgroundColor: '#FAFBFD',
+  },
+  pickerGridHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 6,
+  },
+  pickerGridHeaderCell: {
+    flex: 1,
+    textAlign: 'center',
+    fontFamily: 'System',
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#94A3B8',
+  },
+  pickerDaysGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+  },
+  pickerDayCellWrapper: {
+    width: '14.28%',
+    aspectRatio: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 1,
+  },
+  pickerDayCell: {
+    width: '90%',
+    height: '90%',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderRadius: 999,
+  },
+  pickerDayCellSelected: {
+    backgroundColor: '#3A86FF',
+  },
+  pickerDayText: {
+    fontFamily: 'System',
+    fontSize: 11,
+    color: '#333D53',
+    fontWeight: '500',
+  },
+  pickerDayTextSelected: {
+    color: '#FFFFFF',
+    fontWeight: '700',
   },
 });

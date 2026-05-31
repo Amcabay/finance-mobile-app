@@ -1,107 +1,48 @@
-# 🌌 Finance Flow Mobile
+# Project Overview
 
-Welcome to **Finance Flow Mobile**, a premium, state-of-the-art finance tracker application designed for seamless personal finance management. Built with **React Native (Expo SDK 54)**, **Expo Router**, and backed by **Supabase** and **Expo SQLite**, this application delivers an ultra-smooth, secure, and offline-first mobile experience with a breathtaking modern dark aesthetic.
+This mobile-based personal finance management application is architected with a strict focus on local data synchronization precision, optimized component visualization, daily budget threshold tracking, and real-time billing cycle management. The application architecture prioritizes high performance and reliable offline-first capabilities by separating core business logic from storage infrastructure details. Through this approach, the application guarantees service availability independent of active network connectivity, while maintaining absolute data consistency via a highly structured local database schema.
 
----
+# Technical Stack and Architecture
 
-## ✨ Key Architectural Features
+The application is built upon the following modern technology stack:
+- **Framework Core**: React Native with Expo SDK (Managed Workflow). This choice streamlines cross-platform development while delivering native-like performance through modern JavaScript engines.
+- **Routing System**: Expo Router utilizing a file-based routing approach. This declarative paradigm automates route mapping based on the physical directory structure, minimizing boilerplate code and simplifying navigation state management.
+- **Language**: TypeScript with strict type-safety configuration. All modules are implemented with strict static typing to prevent runtime errors and facilitate long-term codebase refactoring.
+- **Local Persistence**: SQLite via the expo-sqlite library for offline data query processing. Database transactions are executed locally to eliminate network latency and ensure the application remains fully functional without active internet connectivity.
+- **Vector Graphics**: react-native-svg for custom mathematical coordinate-based financial chart rendering. Charts are computed dynamically on the client side to produce precise and responsive visualizations without external performance overhead.
 
-### 1. 🔐 Authentication Flow (Premium Deep Dark & Atmospheric Glow)
-Our authentication subsystem (`login`, `register`, and `forgot-password`) is meticulously designed to create an immersive visual experience from the first interaction:
-* **Premium Theme & Glow:** Implements a premium, custom **Deep Dark Theme** enhanced with sophisticated local asset-based **atmospheric glows**, smooth radial gradients, and elegant micro-animations for high-fidelity interactive fields.
-* **Hybrid 8-Digit OTP Password Recovery:** Features a highly flexible **Hybrid OTP (One-Time Password)** system powered by Supabase. This dual-channel recovery flow is optimized for:
-  * 📱 **Mobile Ecosystem:** Intuitive 8-digit token input fields with automatic focus-forwarding and ergonomic numeric pad integration.
-  * 🌐 **Web Ecosystem:** Standardized secure confirmation links that seamlessly route back to the platform.
-* **Secure Session Management:** Native session tokens are persisted securely using `ExpoSecureStoreAdapter` integrated into the core `supabase.ts` module to prevent exposure.
+# Core Modules and Technical Implementation
 
-### 2. ⚡ Offline-First Database Layer (Local-First Engine)
-To guarantee lightning-fast data mutations and uninterrupted access under weak or non-existent network conditions, the app leverages an advanced offline-first architecture:
-* **Expo SQLite Engine:** Utilizing the modern `expo-sqlite` API, the application creates a highly reliable local-first persistence layer (`finance_flow.db`). All records are stored and queried instantly.
-* **Modular Repository Architecture:** Clean separation of concerns is strictly enforced. Features such as **Bills** (`features/bills`) and **Budgets** (`features/budgets`) are decoupled through dedicated abstraction layers:
-  * `BillRepository` & `BudgetRepository` serve as clean interfaces to isolate the business use-cases from the persistence engines.
-  * Easy switching between local SQLite databases and remote Cloud Supabase syncing mechanisms.
-* **Background Sync Foundation:** Every transaction, bill, or budget record in the SQLite tables includes a critical `sync_status` column (`pending` | `synced`). This column tracks local mutations and serves as the deterministic state engine for future automatic background synchronization routines to Supabase Cloud.
+## 1. Dashboard Screen (app/(tabs)/index.tsx)
 
-### 3. 🛡️ User Privacy & Data Masking Offset Layer
-Security is baked into the core database architecture rather than being treated as an afterthought:
-* **Masking Offset Aware (`getOffset`):** To enforce absolute data privacy and protect against potential cloud database leaks, a unique numerical masking offset algorithm is implemented. Before any financial nominal amounts are sent to Supabase:
-  * The repository applies a deterministic user-specific offset (`getOffset(userId)`) to scramble the financial values.
-  * Upon retrieval, the data is instantly unmasked by reverting the offset through the repository layer (`SupabaseTransactionRepository`, `SupabaseBudgetRepository`, `SupabaseBillRepository`) before reaching the UI.
-  * *No raw transaction numbers ever live unmasked in the cloud storage.*
-* **Row-Level Security (RLS) & Explicit Constraints:** All database mutations explicitly inject the active Supabase `user_id` constraint to strictly isolate tenant boundaries at the server level.
+The dashboard acts as the central hub for aggregating the user's financial metrics with the following technical implementation details:
+- **Data Aggregation Cycle**: Utilizes react-navigation `useFocusEffect` to trigger instant re-fetch queries of SQLite aggregation metrics (Income, Outcome, Wealth) whenever the screen regains focus. This prevents stale data by ensuring core metrics reflect the latest transaction states without reloading the entire application.
+- **Dynamic Expense Distribution**: Renders charts using circle angle calculations based on real-time expense proportions for accurate Cost Analysis visualization. Mathematical vector computations are performed on-the-fly to produce precise visual representations of user expenditures categorized by classification.
+- **Daily Budget Threshold Tracking**: Computes a dynamic progress bar evaluating accumulated current transactions against the maximum daily budget (daily cap). It provides a visual feedback mechanism via a contrasting component color transformation (#EF4444) upon detecting an over-budget status, supported by an integrated modal for direct budget limit mutations to the database.
+- **Local Timezone Normalization**: Implements date string calculations using local timezone offsets to eliminate time synchronization discrepancies between global UTC and the device's local time. This step guarantees that daily transaction logs remain consistent across all physical time zones.
 
----
+## 2. Transaction Management (app/(tabs)/spends.tsx)
 
-## 📂 Project Architecture
+Transaction management offers a highly granular interface for logging and analyzing expenditures:
+- **Linear Interpolation Wave Chart**: Financial trend representation through interactive Y-coordinate calculations mapped linearly based on minimum and maximum transaction bounds, complete with Peak Value markers. The trend line is rendered procedurally to produce a smooth, informative curve.
+- **Multi-Criteria Filtering Engine**: Real-time client-side transaction filtering based on text queries, specific categories, structured date ranges, and nominal value sorting options. The filtering engine is optimized to minimize mobile CPU utilization through efficient array manipulation.
+- **Structural Data Parsing**: Transaction description storage scheme utilizing a string-split encapsulation method to segregate entity names and additional note details within a single database column. This design keeps the SQLite table schema compact while retaining rich data payload capabilities.
 
-```bash
-├── app/                      # Expo Router File-Based Routing
-│   ├── (auth)/               # Authentication Pages (login, register, forgot-password)
-│   ├── (tabs)/               # Bottom-Tab Navigation Main Screens
-│   ├── _layout.tsx           # Global App Shell & Providers Setup
-│   └── modal.tsx             # Interactive Settings/Details Modal
-├── assets/                   # Static Visual Assets (Atmospheric Glows, Icons, Fonts)
-├── components/               # Reusable Atomic UI Components (Buttons, Inputs, Cards)
-├── core/                     # Core App Configuration & Shared Drivers
-│   ├── database/             # expo-sqlite Database Initialization (sqlite.ts)
-│   ├── entities/             # System-Wide TypeScript Domain Interfaces
-│   └── formatters/           # Currency, Date, and Number Formatting Utilities
-├── features/                 # Feature-Driven Modular Architecture
-│   ├── bills/                # Bills & Subscriptions Module (Repository, Infrastructure, Use Cases)
-│   ├── budgets/              # Budget Limit Tracker Module (Repository, Infrastructure)
-│   └── transactions/         # Core Income/Expense Logging Engine
-├── hooks/                    # Custom Global React Hooks (Theme, State, Security)
-├── utils/                    # Utility Singletons & Adapters (supabase.ts + SecureStore)
-```
+## 3. Task and Schedule Planner (app/(tabs)/schedule.tsx)
 
----
+The schedule planner facilitates precise tracking of financial obligations and scheduled notes over time:
+- **Calendar State Management**: Dynamic calendar navigation control directly bound to SQLite monthly query parameters to display relevant notes periodically. Month transitions instantly trigger SQLite query execution with a WHERE clause filter formatted as YYYY-MM.
+- **Current Date Anchor**: Implements a static visual indicator with a distinct marker color on the date grid to facilitate easy identification of today (Today). Detection logic uses the device's local time to match day, month, and year values during calendar grid rendering.
+- **Class-Based Note Categorization**: Categorizes notes into Urgent, Reminder, and Daily classes, featuring conditional form rendering that integrates the Native Date Picker component to secure due date input validity.
 
-## 🚀 Get Started
+## 4. Billing Tracker (app/(tabs)/bills.tsx)
 
-### 1. Install Dependencies
-Ensure you have Node.js and the React Native development environment set up on your machine. Install the project dependencies by running:
-```bash
-npm install
-```
+The billing tracker is designed to mitigate late payment risks through a proactive monitoring interface:
+- **Conditional State Card**: An adaptive billing status review component that automatically transitions its color scheme to a sharp warning color and modifies the action button label to "Check now" upon detecting active bills exceeding their due date (overdue).
+- **Focused Layout Mode**: Implements a toggle view on the "See all" functionality that restructures the interface hierarchy by hiding entry forms to focus the user's view on the Recent Bills list, without losing access to main navigation or the Floating Action Button (FAB).
+- **Comprehensive Billing Matrix**: Complex data entry form parameters including billing type dropdowns, installment tenor input, monthly/annual billing cycle days, and date range boundaries (Start and End Date).
+- **Contextual Data Mutation**: Supports data mutation operations (Edit and Delete) via rapid-access contextual option modals mapped directly to SQLite database query executions.
 
-### 2. Configure Environment Variables
-Create a `.env` file at the root of the project and populate it with your Supabase credentials:
-```env
-EXPO_PUBLIC_SUPABASE_URL=your_supabase_project_url
-EXPO_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
-```
+# Development Roadmap
 
-### 3. Run the App Locally
-Start the Expo development server:
-```bash
-npx expo start
-```
-
-In the Metro Bundler terminal output, you'll find various options to launch the app:
-* Press **`a`** to open in the [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/).
-* Press **`i`** to open in the [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/).
-* Scan the QR code using the **Expo Go** app on your physical mobile device.
-* Press **`w`** to view the app on web browsers.
-
----
-
-## 📚 Learn More & Resources
-
-For detailed guides and advanced implementation configurations, check out:
-* 📘 [Expo Documentation](https://docs.expo.dev/) - Official fundamentals and advanced guides.
-* 🎓 [Learn Expo Tutorial](https://docs.expo.dev/tutorial/introduction/) - Step-by-step universal app guides.
-* 🚀 [Supabase JS Client SDK](https://supabase.com/docs/reference/javascript/introduction) - Remote backend and authentication reference.
-* 💾 [Expo SQLite Reference](https://docs.expo.dev/versions/v54.0.0/sdk/sqlite/) - Version-specific Expo SQLite guidelines.
-
----
-
-## 👥 Community & Support
-
-Join the global community of developers crafting unified user experiences:
-* **Expo GitHub:** [expo/expo](https://github.com/expo/expo)
-* **Discord Community:** [chat.expo.dev](https://chat.expo.dev)
-
----
-<p align="center">
-  Crafted with ❤️ by the Finance Flow Engineering Team
-</p>
+- **Next Phase**: Integration of an OCR (Optical Character Recognition) module for automated bill/receipt photo scanning to populate entry parameters on the Bills form. This module is planned to run using a highly optimized local mobile-native engine to preserve the offline-first paradigm.
