@@ -51,29 +51,44 @@ export default function SchedulesScreen() {
   const [dueDate, setDueDate] = useState(''); // Format: YYYY-MM-DD
   const [reminderBefore, setReminderBefore] = useState('');
 
-  // Date Picker Modal States
+  // Date Picker States
   const [isDatePickerOpen, setIsDatePickerOpen] = useState(false);
   const [pickerMonth, setPickerMonth] = useState<Date>(() => new Date());
 
-  // Format estetik untuk tampilan Due Date Capsule (e.g. "29 May 2026")
-  const formattedDueDateDisplay = useMemo(() => {
-    if (!dueDate) return 'Select due date';
-    const parts = dueDate.split('-');
-    if (parts.length !== 3) return dueDate;
+  // Reset form inputs
+  const resetNoteForm = () => {
+    setNewNote('');
+    setNoteCategory('daily');
+    setDueDate('');
+    setReminderBefore('');
+  };
 
-    const year = parts[0];
-    const monthIdx = parseInt(parts[1]) - 1;
-    const day = parseInt(parts[2]);
+  // Navigasi Bulan dinamis
+  const handlePrevMonth = () => {
+    setCurrentMonth(prev => new Date(prev.getFullYear(), prev.getMonth() - 1, 1));
+  };
 
-    const monthNames = [
-      'January', 'February', 'March', 'April', 'May', 'June',
-      'July', 'August', 'September', 'October', 'November', 'December'
-    ];
-    const monthName = monthNames[monthIdx] || parts[1];
-    return `${day} ${monthName} ${year}`;
-  }, [dueDate]);
+  const handleNextMonth = () => {
+    setCurrentMonth(prev => new Date(prev.getFullYear(), prev.getMonth() + 1, 1));
+  };
 
-  // Perhitungan kalender mini picker dinamis
+  // Logika Date Picker kustom
+  const handlePrevPickerMonth = () => {
+    setPickerMonth(prev => new Date(prev.getFullYear(), prev.getMonth() - 1, 1));
+  };
+
+  const handleNextPickerMonth = () => {
+    setPickerMonth(prev => new Date(prev.getFullYear(), prev.getMonth() + 1, 1));
+  };
+
+  const handleSelectPickerDay = (day: number) => {
+    const month = String(pickerMonth.getMonth() + 1).padStart(2, '0');
+    const dayStr = String(day).padStart(2, '0');
+    setDueDate(`${pickerMonth.getFullYear()}-${month}-${dayStr}`);
+    setIsDatePickerOpen(false);
+  };
+
+  // Ambil data hari dalam pickerMonth
   const pickerDaysInMonth = useMemo(() => {
     return new Date(pickerMonth.getFullYear(), pickerMonth.getMonth() + 1, 0).getDate();
   }, [pickerMonth]);
@@ -83,7 +98,7 @@ export default function SchedulesScreen() {
   }, [pickerMonth]);
 
   const pickerCalendarCells = useMemo(() => {
-    const cells: (number | null)[] = [];
+    const cells = [];
     for (let i = 0; i < pickerStartDayOffset; i++) {
       cells.push(null);
     }
@@ -101,40 +116,27 @@ export default function SchedulesScreen() {
     return `${monthNames[pickerMonth.getMonth()]} ${pickerMonth.getFullYear()}`;
   }, [pickerMonth]);
 
-  const handlePrevPickerMonth = () => {
-    setPickerMonth(prev => {
-      const newDate = new Date(prev);
-      newDate.setMonth(newDate.getMonth() - 1);
-      return newDate;
-    });
-  };
+  const formattedDueDateDisplay = useMemo(() => {
+    if (!dueDate) return 'Select due date';
+    const dateObj = new Date(dueDate);
+    const monthNames = [
+      'January', 'February', 'March', 'April', 'May', 'June',
+      'July', 'August', 'September', 'October', 'November', 'December'
+    ];
+    return `${dateObj.getDate()} ${monthNames[dateObj.getMonth()]} ${dateObj.getFullYear()}`;
+  }, [dueDate]);
 
-  const handleNextPickerMonth = () => {
-    setPickerMonth(prev => {
-      const newDate = new Date(prev);
-      newDate.setMonth(newDate.getMonth() + 1);
-      return newDate;
-    });
-  };
-
-  const handleSelectPickerDay = (day: number) => {
-    const monthStr = String(pickerMonth.getMonth() + 1).padStart(2, '0');
-    const dayStr = String(day).padStart(2, '0');
-    const formattedDate = `${pickerMonth.getFullYear()}-${monthStr}-${dayStr}`;
-    setDueDate(formattedDate);
-    setIsDatePickerOpen(false);
-  };
-
-  // Hitung jumlah hari & offset hari pertama dari bulan aktif secara dinamis
+  // Hitung jumlah hari dalam bulan aktif
   const daysInMonth = useMemo(() => {
     return new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 0).getDate();
   }, [currentMonth]);
 
+  // Mengambil index hari pertama dalam bulan aktif (0: Sun, 1: Mon, dst)
   const startDayOffset = useMemo(() => {
     return new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1).getDay();
   }, [currentMonth]);
 
-  // Format teks header bulan dinamis (English)
+  // Nama header bulan dinamis
   const formattedMonthStr = useMemo(() => {
     const monthNames = [
       'January', 'February', 'March', 'April', 'May', 'June',
@@ -157,21 +159,6 @@ export default function SchedulesScreen() {
       const db = await getDatabase();
       const yearMonthPattern = `${formattedYearMonth}-%`;
 
-      // Seed notes default secara aman dengan mengecek keberadaannya satu per satu
-      const defaultNotes = [
-        { id: '1', user_id: 'offline-user', note: "Internet Subscription Payment due", category: 'reminder', date: '2026-06-10', due_date: '2026-06-10', reminder_before: '2 days' },
-        { id: '2', user_id: 'offline-user', note: "Buy something for mom's birthday", category: 'daily', date: '2026-06-15', due_date: '', reminder_before: '' },
-      ];
-      for (const n of defaultNotes) {
-        const row = await db.getAllAsync<any>("SELECT id FROM notes WHERE id = ?", [n.id]);
-        if (!row || row.length === 0) {
-          await db.runAsync(
-            "INSERT INTO notes (id, user_id, note, category, date, due_date, reminder_before) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            [n.id, n.user_id, n.note, n.category, n.date, n.due_date, n.reminder_before]
-          );
-        }
-      }
-
       const rows = await db.getAllAsync<any>(
         "SELECT * FROM notes WHERE user_id = ? AND date LIKE ? ORDER BY date ASC, id ASC",
         ['offline-user', yearMonthPattern]
@@ -192,7 +179,7 @@ export default function SchedulesScreen() {
     }
   }, [formattedYearMonth]);
 
-  // Inisialisasi tabel notes di SQLite secara lazily
+  // Inisialisasi tabel notes di SQLite secara lazily dan seed data default sekali saja
   const initNotesTable = useCallback(async () => {
     try {
       const db = await getDatabase();
@@ -207,6 +194,23 @@ export default function SchedulesScreen() {
           reminder_before TEXT
         );
       `);
+
+      // Seed default notes inside initNotesTable (called once on startup)
+      const countResult = await db.getAllAsync<{ count: number }>("SELECT COUNT(*) as count FROM notes");
+      if (countResult && countResult[0] && countResult[0].count === 0) {
+        const defaultNotes = [
+          { id: '1', user_id: 'offline-user', note: "Internet Subscription Payment due", category: 'reminder', date: '2026-06-10', due_date: '2026-06-10', reminder_before: '2 days' },
+          { id: '2', user_id: 'offline-user', note: "Buy something for mom's birthday", category: 'daily', date: '2026-06-15', due_date: '', reminder_before: '' },
+        ];
+        for (const n of defaultNotes) {
+          await db.runAsync(
+            "INSERT INTO notes (id, user_id, note, category, date, due_date, reminder_before) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [n.id, n.user_id, n.note, n.category, n.date, n.due_date, n.reminder_before]
+          );
+        }
+        console.log('✅ Seeded default notes successfully inside initNotesTable');
+      }
+
       setDbReady(true);
     } catch (error) {
       console.error('Failed to initialize notes table:', error);
@@ -224,64 +228,36 @@ export default function SchedulesScreen() {
     }
   }, [loadOfflineData, dbReady]);
 
-  // Navigasi Bulan Mundur (Kiri)
-  const handlePrevMonth = () => {
-    setCurrentMonth(prev => {
-      const newDate = new Date(prev);
-      newDate.setMonth(newDate.getMonth() - 1);
-      return newDate;
-    });
-    setSelectedDay(1); // Set ke tanggal 1 pada bulan baru
-  };
-
-  // Navigasi Bulan Maju (Kanan)
-  const handleNextMonth = () => {
-    setCurrentMonth(prev => {
-      const newDate = new Date(prev);
-      newDate.setMonth(newDate.getMonth() + 1);
-      return newDate;
-    });
-    setSelectedDay(1); // Set ke tanggal 1 pada bulan baru
-  };
-
-  // Bersihkan input formulir
-  const resetNoteForm = () => {
-    setNewNote('');
-    setNoteCategory('daily');
-    setDueDate('');
-    setReminderBefore('');
-  };
-
-  // Menyimpan note baru ke SQLite
+  // Menambahkan note ke SQLite secara offline
   const handleAddEvent = async () => {
     if (!newNote.trim()) {
-      Alert.alert('Error', 'Please enter your event note');
+      Alert.alert('Error', 'Please enter note details');
       return;
     }
 
-    if (noteCategory === 'reminder' && !dueDate.trim()) {
-      Alert.alert('Error', 'Please enter due date');
+    if (noteCategory === 'reminder' && !dueDate) {
+      Alert.alert('Error', 'Please select due date');
       return;
     }
 
     try {
       const db = await getDatabase();
-      const dayStr = String(selectedDay).padStart(2, '0');
-      const noteDateStr = `${formattedYearMonth}-${dayStr}`;
       const newId = String(Date.now());
       
+      const dayStr = String(selectedDay).padStart(2, '0');
+      const noteDateStr = `${formattedYearMonth}-${dayStr}`;
+
       await db.runAsync(
-        `INSERT INTO notes (
-          id, user_id, note, category, date, due_date, reminder_before
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO notes (id, user_id, note, category, date, due_date, reminder_before) 
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
         [
           newId,
           'offline-user',
           newNote.trim(),
           noteCategory,
           noteDateStr,
-          noteCategory === 'reminder' ? dueDate.trim() : null,
-          noteCategory === 'reminder' ? reminderBefore.trim() : null,
+          noteCategory === 'reminder' ? dueDate : '',
+          noteCategory === 'reminder' ? reminderBefore.trim() : ''
         ]
       );
 
@@ -718,7 +694,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     fontFamily: 'System',
     fontSize: 11,
-    fontWeight: '500',
+    fontWeight: '600',
     color: '#94A3B8',
   },
   daysGrid: {
@@ -726,7 +702,7 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
   },
   dayCellWrapper: {
-    width: '14.28%', // 7 columns grid
+    width: '14.28%',
     aspectRatio: 1,
     justifyContent: 'center',
     alignItems: 'center',
@@ -741,25 +717,25 @@ const styles = StyleSheet.create({
     position: 'relative',
   },
   actualTodayCell: {
-    backgroundColor: '#3A86FF',
+    borderWidth: 1.5,
+    borderColor: '#3A86FF',
+  },
+  actualTodayText: {
+    color: '#3A86FF',
+    fontWeight: '700',
+  },
+  selectedCell: {
+    backgroundColor: '#333D53',
+  },
+  selectedText: {
+    color: '#FFFFFF',
+    fontWeight: '700',
   },
   dayText: {
     fontFamily: 'System',
     fontSize: 13,
     color: '#333D53',
-  },
-  actualTodayText: {
-    color: '#FFFFFF',
-    fontWeight: '700',
-  },
-  selectedCell: {
-    borderWidth: 1.5,
-    borderColor: '#333D53',
-    backgroundColor: '#F2F5FF',
-  },
-  selectedText: {
-    fontWeight: '700',
-    color: '#333D53',
+    fontWeight: '500',
   },
   eventIndicator: {
     position: 'absolute',
@@ -775,7 +751,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#F59E0B',
   },
   eventIndicatorDaily: {
-    backgroundColor: '#2F95F6',
+    backgroundColor: '#3A86FF',
   },
   schedulesSection: {
     marginTop: 8,
@@ -794,6 +770,7 @@ const styles = StyleSheet.create({
     fontFamily: 'System',
     fontSize: 12,
     color: '#3A86FF',
+    fontWeight: '600',
     textDecorationLine: 'underline',
     marginTop: 4,
   },
@@ -1072,6 +1049,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     borderRadius: 999,
+    position: 'relative',
   },
   pickerDayCellSelected: {
     backgroundColor: '#3A86FF',

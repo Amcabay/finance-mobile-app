@@ -53,6 +53,7 @@ export default function DashboardScreen() {
   // Financial States
   const [totalIncome, setTotalIncome] = useState(0);
   const [totalOutcome, setTotalOutcome] = useState(0);
+  const [totalWealth, setTotalWealth] = useState(0);
   const [spentToday, setSpentToday] = useState(0);
   const [dailyLimit, setDailyLimit] = useState(200000); // limit default: 200.000
   const [categoryExpenses, setCategoryExpenses] = useState<CategoryExpense[]>([]);
@@ -74,6 +75,22 @@ export default function DashboardScreen() {
       const now = new Date();
       const localNow = new Date(now.getTime() - (now.getTimezoneOffset() * 60000));
       const todayStr = localNow.toISOString().split('T')[0];
+
+      // Empty transaction check for self-healing balance ledger integrity
+      const txCountRows = await db.getAllAsync<any>(
+        "SELECT COUNT(*) as count FROM transactions"
+      );
+      const txCount = txCountRows[0]?.count || 0;
+      if (txCount === 0) {
+        await db.runAsync("UPDATE accounts SET balance = 0");
+      }
+
+      // 0. DINAMISASI TOTAL WEALTH (SUM Balance dari tabel accounts)
+      const wealthRows = await db.getAllAsync<any>(
+        "SELECT SUM(balance) AS total FROM accounts"
+      );
+      const sumWealth = wealthRows[0]?.total || 0;
+      setTotalWealth(sumWealth);
 
       // 1. DINAMISASI INCOME & OUTCOME (SUM Transaksi dari SQLite)
       const incomeRows = await db.getAllAsync<any>(
@@ -268,6 +285,15 @@ export default function DashboardScreen() {
           </TouchableOpacity>
         </View>
 
+        {/* TOTAL WEALTH CARD */}
+        <View style={styles.wealthCard}>
+          <View style={styles.wealthHeader}>
+            <Ionicons name="wallet-outline" size={18} color="#2F95F6" />
+            <Text style={styles.wealthLabel}>Total Wealth</Text>
+          </View>
+          <Text style={styles.wealthValue}>{formatIDR(totalWealth)}</Text>
+        </View>
+
         {/* MINI CARDS (Income & Outcome dinamis dari SQLite) */}
         <View style={styles.summaryGrid}>
           <View style={styles.incomeCard}>
@@ -300,13 +326,13 @@ export default function DashboardScreen() {
                 <G transform="rotate(0 60 60)">
                   {/* Lingkaran Dasar Transparan/Abu */}
                   <Circle
-                    cx={60}
-                    cy={60}
-                    r={45}
-                    stroke="#EEF1F6"
-                    strokeWidth={12}
-                    fill="none"
-                  />
+                     cx={60}
+                     cy={60}
+                     r={45}
+                     stroke="#EEF1F6"
+                     strokeWidth={12}
+                     fill="none"
+                   />
                   {/* Segmen Warna-Warni Berdasarkan Proporsi Persentase Pengeluaran */}
                   {donutSegments.map((segment, idx) => (
                     <Circle
@@ -493,6 +519,37 @@ const styles = StyleSheet.create({
   },
   settingsButton: {
     padding: 4,
+  },
+  wealthCard: {
+    borderRadius: 24,
+    backgroundColor: '#EEF4FF',
+    padding: 18,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: '#D0E1FD',
+    shadowColor: '#2F95F6',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    elevation: 3,
+  },
+  wealthHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 6,
+  },
+  wealthLabel: {
+    fontFamily: 'System',
+    fontSize: 13,
+    fontWeight: '500',
+    color: '#1E3A8A',
+  },
+  wealthValue: {
+    fontFamily: 'System',
+    fontSize: 26,
+    fontWeight: '800',
+    color: '#1E3A8A',
   },
   summaryGrid: {
     flexDirection: 'row',

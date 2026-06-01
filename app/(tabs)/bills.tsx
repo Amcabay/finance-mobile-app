@@ -21,6 +21,23 @@ import { getDatabase } from '@/core/database/sqlite';
 
 const billRepository = new BillRepository();
 
+const formatDateString = (dateStr: string) => {
+  if (!dateStr) return '';
+  const match = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (match) return dateStr;
+  
+  try {
+    const date = new Date(dateStr);
+    if (isNaN(date.getTime())) return '';
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  } catch (e) {
+    return '';
+  }
+};
+
 export default function BillsScreen() {
   const [loading, setLoading] = useState(true);
   const [bills, setBills] = useState<any[]>([]);
@@ -40,6 +57,16 @@ export default function BillsScreen() {
   const [installment, setInstallment] = useState<'monthly' | 'yearly'>('monthly');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
+  const [billType, setBillType] = useState<'subscription' | 'installment'>('subscription');
+  const [currentTenor, setCurrentTenor] = useState('0');
+  const [totalTenor, setTotalTenor] = useState('12');
+
+  // Multi-wallet account states
+  const [accounts, setAccounts] = useState<any[]>([]);
+  const [selectedAccountId, setSelectedAccountId] = useState('acc-cash');
+
+  // Accordion Expand State
+  const [expandedBillId, setExpandedBillId] = useState<string | null>(null);
 
   // Dropdown Picker States
   const [isCategoryPickerOpen, setIsCategoryPickerOpen] = useState(false);
@@ -56,37 +83,12 @@ export default function BillsScreen() {
   const loadOfflineBills = useCallback(async () => {
     try {
       const dbBills = await billRepository.getBills('offline-user');
-      
-      if (dbBills && dbBills.length > 0) {
-        setBills(dbBills);
-      } else {
-        // Seeding tagihan offline default jika SQLite kosong
-        const defaultBills = [
-          {
-            name: 'Wifi Internet',
-            amount: 350000,
-            category: 'Internet',
-            frequency: 'monthly' as const,
-            billing_day: 15,
-            active: true,
-          },
-          {
-            name: 'Electricity Token',
-            amount: 250000,
-            category: 'Utility',
-            frequency: 'monthly' as const,
-            billing_day: 5,
-            active: true,
-          }
-        ];
-
-        const seeded = [];
-        for (const b of defaultBills) {
-          const added = await billRepository.add('offline-user', b);
-          seeded.push(added);
-        }
-        setBills(seeded);
-      }
+      const sanitized = (dbBills || []).map(b => ({
+        ...b,
+        endDate: b.endDate ? formatDateString(b.endDate) : '',
+        lastGeneratedMonth: b.lastGeneratedMonth ? b.lastGeneratedMonth.substring(0, 7) : ''
+      }));
+      setBills(sanitized);
     } catch (error) {
       console.error('Failed to load offline bills:', error);
     } finally {
@@ -94,21 +96,63 @@ export default function BillsScreen() {
     }
   }, []);
 
+  const loadAccounts = useCallback(async () => {
+    try {
+      const db = await getDatabase();
+
+      // Self-healing database integrity guard
+      const txCountRows = await db.getAllAsync<any>(
+        "SELECT COUNT(*) as count FROM transactions"
+      );
+      const txCount = txCountRows[0]?.count || 0;
+      if (txCount === 0) {
+        await db.runAsync("UPDATE accounts SET balance = 0");
+      }
+
+      const rows = await db.getAllAsync<any>("SELECT * FROM accounts");
+      if (rows) {
+        setAccounts(rows.map(r => ({
+          id: r.id,
+          name: r.name,
+          type: r.type,
+          balance: Number(r.balance),
+        })));
+      }
+    } catch (error) {
+      console.error('Failed to load accounts in bills:', error);
+    }
+  }, []);
+
   useEffect(() => {
     loadOfflineBills();
-  }, [loadOfflineBills]);
+    loadAccounts();
+  }, [loadOfflineBills, loadAccounts]);
+
+  // Automated listener effect for Bill Type -> Category auto-selection
+  useEffect(() => {
+    if (billType === 'installment') {
+      setCategory('Installment');
+    } else if (category === 'Installment') {
+      setCategory('Subscription');
+    }
+  }, [billType]);
 
   // Hitung tagihan yang terlambat
   const lateBills = useMemo(() => {
-    return bills.filter(b => b.active && b.billing_day < currentDay);
-  }, [bills, currentDay]);
+    const currentMonth = today.toISOString().slice(0, 7); // YYYY-MM
+    return bills.filter(b => b.active && b.billing_day < currentDay && b.lastGeneratedMonth !== currentMonth);
+  }, [bills, currentDay, today]);
 
   const hasLatePayment = lateBills.length > 0;
+
+  const hasDoneBill = useMemo(() => {
+    return bills.some(b => !b.active);
+  }, [bills]);
 
   // Saring bills yang ditampilkan (See all toggle)
   const displayedBills = useMemo(() => {
     if (isSeeAllActive) return bills;
-    return bills.slice(0, 2);
+    return bills.filter(b => b.active);
   }, [bills, isSeeAllActive]);
 
   // Format estetik untuk tampilan tanggal
@@ -174,19 +218,120 @@ export default function BillsScreen() {
     const monthStr = String(pickerMonth.getMonth() + 1).padStart(2, '0');
     const dayStr = String(day).padStart(2, '0');
     const formattedDate = `${pickerMonth.getFullYear()}-${monthStr}-${dayStr}`;
+    const sanitizedDate = formatDateString(formattedDate);
     
     if (datePickerTarget === 'start') {
-      setStartDate(formattedDate);
+      setStartDate(sanitizedDate);
     } else if (datePickerTarget === 'end') {
-      setEndDate(formattedDate);
+      setEndDate(sanitizedDate);
     }
     
     setDatePickerTarget(null);
   };
 
+  const formatThousandsSeparator = (value: string) => {
+    const cleanValue = value.replace(/\D/g, '');
+    if (!cleanValue) return '';
+    return Number(cleanValue).toLocaleString('id-ID');
+  };
+
+  const handlePayBill = async (billToPay?: any) => {
+    const targetBill = billToPay || selectedBill;
+    if (!targetBill) return;
+
+    try {
+      const db = await getDatabase();
+      const amountVal = Number(targetBill.amount);
+      const accountId = targetBill.account_id || 'acc-cash';
+      const billName = targetBill.name;
+      const isInstallment = targetBill.bill_type === 'installment';
+      
+      const now = new Date();
+      const currentMonthStr = now.toISOString().slice(0, 7); // YYYY-MM
+      
+      // Calculate nextMonthStr (+1 month)
+      let nextMonthStr = currentMonthStr;
+      if (targetBill.lastGeneratedMonth) {
+        const [yr, mth] = targetBill.lastGeneratedMonth.split('-').map(Number);
+        const nextDate = new Date(yr, mth, 1);
+        nextMonthStr = nextDate.toISOString().slice(0, 7);
+      } else {
+        nextMonthStr = currentMonthStr;
+      }
+
+      const formatDateForHistory = (d: Date) => {
+        const day = String(d.getDate()).padStart(2, '0');
+        const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        const month = monthNames[d.getMonth()];
+        const year = d.getFullYear();
+        return `${day} ${month} ${year}`;
+      };
+
+      await db.withTransactionAsync(async () => {
+        if (isInstallment) {
+          const todayFormatted = formatDateForHistory(now);
+          const existingHistory = targetBill.payment_history || '';
+          const newHistory = existingHistory ? `${existingHistory}|||${todayFormatted}` : todayFormatted;
+          const nextTenor = (targetBill.current_tenor || 0) + 1;
+          const totalTenorVal = targetBill.total_tenor || 12;
+          const isCompleted = nextTenor >= totalTenorVal;
+          const newActive = isCompleted ? 0 : 1;
+
+          await db.runAsync(
+            `UPDATE bills SET 
+              last_generated_month = ?, 
+              current_tenor = ?, 
+              payment_history = ?, 
+              active = ?,
+              sync_status = 'pending' 
+             WHERE id = ?`,
+            [nextMonthStr, nextTenor, newHistory, newActive, targetBill.id]
+          );
+        } else {
+          // For 'subscription', only roll over due date by +1 month without incrementing counters or appending history
+          await db.runAsync(
+            `UPDATE bills SET last_generated_month = ?, sync_status = 'pending' WHERE id = ?`,
+            [nextMonthStr, targetBill.id]
+          );
+        }
+
+        // Operation B: INSERT INTO transactions query
+        const newTxId = 'tx-' + String(Date.now()) + '-' + Math.random().toString(36).substr(2, 4);
+        const txDesc = `Paid Bill: ${billName}`;
+        const txDate = now.toISOString().slice(0, 10); // YYYY-MM-DD
+        
+        await db.runAsync(
+          `INSERT INTO transactions (id, user_id, description, amount, category, type, date, account_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          [newTxId, 'offline-user', txDesc, amountVal, 'Bills', 'expense', txDate, accountId]
+        );
+
+        // Operation C: Subtract the bill's amount from the linked wallet
+        await db.runAsync(
+          `UPDATE accounts SET balance = balance - ? WHERE id = ?`,
+          [amountVal, accountId]
+        );
+      });
+
+      // Refresh states
+      setIsMenuOpen(false);
+      setSelectedBill(null);
+      await loadOfflineBills();
+      await loadAccounts();
+      
+      Alert.alert('Success', `Bill "${billName}" has been successfully marked as Paid!`);
+    } catch (error) {
+      console.error('Failed to mark bill as paid:', error);
+      Alert.alert('Error', 'Failed to process payment transaction.');
+    }
+  };
+
   const handleAddBill = async () => {
-    const amountVal = parseFloat(billAmount);
+    const cleanAmountStr = billAmount.replace(/\./g, '');
+    const amountVal = parseFloat(cleanAmountStr);
     const dayVal = parseInt(billingDay);
+    const currentTenorVal = parseInt(currentTenor) || 0;
+    const totalTenorVal = parseInt(totalTenor) || 12;
 
     if (!billName.trim()) {
       Alert.alert('Error', 'Please enter bills name');
@@ -214,6 +359,10 @@ export default function BillsScreen() {
             frequency = ?, 
             billing_day = ?, 
             end_date = ?, 
+            account_id = ?,
+            bill_type = ?,
+            current_tenor = ?,
+            total_tenor = ?,
             sync_status = 'pending' 
           WHERE id = ?`,
           [
@@ -222,7 +371,11 @@ export default function BillsScreen() {
             category,
             installment,
             dayVal,
-            endDate ? endDate : null,
+            endDate ? formatDateString(endDate) : null,
+            selectedAccountId,
+            billType,
+            currentTenorVal,
+            totalTenorVal,
             editingBillId
           ]
         );
@@ -235,7 +388,11 @@ export default function BillsScreen() {
           frequency: installment,
           billing_day: dayVal,
           active: true,
-          endDate: endDate ? endDate : undefined,
+          endDate: endDate ? formatDateString(endDate) : undefined,
+          account_id: selectedAccountId,
+          bill_type: billType,
+          current_tenor: currentTenorVal,
+          total_tenor: totalTenorVal,
         });
       }
 
@@ -253,11 +410,15 @@ export default function BillsScreen() {
 
     setEditingBillId(selectedBill.id);
     setBillName(selectedBill.name);
-    setBillAmount(String(selectedBill.amount));
+    setBillAmount(formatThousandsSeparator(String(selectedBill.amount)));
     setBillingDay(String(selectedBill.billing_day));
     setCategory(selectedBill.category);
     setInstallment(selectedBill.frequency);
-    setEndDate(selectedBill.endDate || '');
+    setEndDate(formatDateString(selectedBill.endDate || ''));
+    setSelectedAccountId(selectedBill.account_id || 'acc-cash');
+    setBillType(selectedBill.bill_type || 'subscription');
+    setCurrentTenor(String(selectedBill.current_tenor || 0));
+    setTotalTenor(String(selectedBill.total_tenor || 12));
 
     setIsMenuOpen(false);
     setIsAdding(true);
@@ -300,6 +461,10 @@ export default function BillsScreen() {
     setInstallment('monthly');
     setStartDate('');
     setEndDate('');
+    setSelectedAccountId('acc-cash');
+    setBillType('subscription');
+    setCurrentTenor('0');
+    setTotalTenor('12');
   };
 
   if (loading) {
@@ -397,60 +562,181 @@ export default function BillsScreen() {
             )}
             <Text style={styles.billsListTitle}>Recent Bills</Text>
           </View>
-          {!isSeeAllActive && (
+          {!isSeeAllActive && hasDoneBill && (
             <TouchableOpacity activeOpacity={0.7} onPress={() => setIsSeeAllActive(true)}>
-              <Text style={styles.seeAllLink}>See all</Text>
+              <Text style={styles.seeAllLink}>History</Text>
             </TouchableOpacity>
           )}
         </View>
 
-        {displayedBills.map(b => (
-          <View key={b.id} style={styles.billCard}>
-            <View style={styles.billCardHeader}>
-              <View style={styles.categoryBadge}>
-                <Ionicons 
-                  name={b.category.toLowerCase() === 'internet' ? 'wifi' : 'flash-outline'} 
-                  size={16} 
-                  color="#F59E0B" 
-                />
-              </View>
-              <Text style={styles.billCardTitle}>{b.name}</Text>
-              
-              {/* Ellipsis menu button */}
-              <TouchableOpacity 
-                style={styles.ellipsisButton}
-                onPress={() => {
-                  setSelectedBill(b);
-                  setIsMenuOpen(true);
-                }}
-                activeOpacity={0.7}
-              >
-                <Ionicons name="ellipsis-vertical" size={18} color="#9EB3CD" />
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.billCardDataRows}>
-              <View style={styles.dataRow}>
-                <Text style={styles.dataLabel}>Amount</Text>
-                <Text style={styles.dataValueAmount}>{formatIDR(b.amount)}</Text>
-              </View>
-              <View style={styles.dataRow}>
-                <Text style={styles.dataLabel}>Installment</Text>
-                <Text style={styles.dataValue}>{b.frequency === 'yearly' ? 'Yearly' : 'Monthly'}</Text>
-              </View>
-              <View style={styles.dataRow}>
-                <Text style={styles.dataLabel}>Billing Day</Text>
-                <Text style={styles.dataValue}>Day {b.billing_day} of month</Text>
-              </View>
-              <View style={styles.dataRow}>
-                <Text style={styles.dataLabel}>Status</Text>
-                <Text style={[styles.dataValue, { color: b.active ? '#10B981' : '#64748B', fontWeight: '700' }]}>
-                  {b.active ? 'Active' : 'Inactive'}
-                </Text>
-              </View>
-            </View>
+        {displayedBills.length === 0 ? (
+          <View style={styles.emptyStateContainer}>
+            <Text style={styles.emptyStateText}>No bills added</Text>
           </View>
-        ))}
+        ) : (
+          displayedBills.map(b => (
+            <View key={b.id} style={styles.billCard}>
+              <View style={styles.billCardHeader}>
+                <View style={styles.categoryBadge}>
+                  <Ionicons 
+                    name={b.category.toLowerCase() === 'internet' ? 'wifi' : 'flash-outline'} 
+                    size={16} 
+                    color="#F59E0B" 
+                  />
+                </View>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 }}>
+                  <Text style={styles.billCardTitle}>{b.name}</Text>
+                  {b.bill_type === 'installment' && (
+                    <View style={[
+                      styles.statusBadge,
+                      (b.current_tenor || 0) < (b.total_tenor || 12) ? styles.statusBadgeOngoing : styles.statusBadgeCompleted
+                    ]}>
+                      <Text style={[
+                        styles.statusBadgeText,
+                        (b.current_tenor || 0) < (b.total_tenor || 12) ? styles.statusBadgeTextOngoing : styles.statusBadgeTextCompleted
+                      ]}>
+                        {(b.current_tenor || 0) < (b.total_tenor || 12) ? 'Ongoing' : 'Done'}
+                      </Text>
+                    </View>
+                  )}
+                </View>
+                
+                {/* Ellipsis menu button */}
+                <TouchableOpacity 
+                  style={styles.ellipsisButton}
+                  onPress={() => {
+                    setSelectedBill(b);
+                    setIsMenuOpen(true);
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons name="ellipsis-vertical" size={18} color="#9EB3CD" />
+                </TouchableOpacity>
+              </View>
+
+              <View style={styles.billCardDataRows}>
+                <View style={styles.dataRow}>
+                  <Text style={styles.dataLabel}>Amount</Text>
+                  <Text style={styles.dataValueAmount}>{formatIDR(b.amount)}</Text>
+                </View>
+                <View style={styles.dataRow}>
+                  <Text style={styles.dataLabel}>Wallet</Text>
+                  <Text style={styles.dataValue}>
+                    {accounts.find(a => a.id === b.account_id)?.name || 'Cash'}
+                  </Text>
+                </View>
+                <View style={styles.dataRow}>
+                  <Text style={styles.dataLabel}>Type</Text>
+                  <Text style={[styles.dataValue, { textTransform: 'capitalize', fontWeight: '600', color: b.bill_type === 'installment' ? '#F59E0B' : '#3A86FF' }]}>
+                    {b.bill_type || 'subscription'}
+                  </Text>
+                </View>
+                {b.bill_type === 'installment' && (
+                  <View style={styles.dataRow}>
+                    <Text style={styles.dataLabel}>Tenor Paid</Text>
+                    <Text style={styles.dataValue}>
+                      {b.current_tenor || 0} / {b.total_tenor || 12}
+                    </Text>
+                  </View>
+                )}
+                <View style={styles.dataRow}>
+                  <Text style={styles.dataLabel}>Installment</Text>
+                  <Text style={styles.dataValue}>{b.frequency === 'yearly' ? 'Yearly' : 'Monthly'}</Text>
+                </View>
+                <View style={styles.dataRow}>
+                  <Text style={styles.dataLabel}>Billing Day</Text>
+                  <Text style={styles.dataValue}>Day {b.billing_day} of month</Text>
+                </View>
+                <View style={styles.dataRow}>
+                  <Text style={styles.dataLabel}>Status</Text>
+                  <Text style={[styles.dataValue, { color: b.active ? '#10B981' : '#64748B', fontWeight: '700' }]}>
+                    {b.active ? 'Active' : 'Completed'}
+                  </Text>
+                </View>
+              </View>
+
+              <View style={styles.divider} />
+
+               <View style={styles.billCardFooter}>
+                <TouchableOpacity
+                  onPress={() => setExpandedBillId(prev => prev === b.id ? null : b.id)}
+                  style={styles.expandButton}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.expandButtonText}>
+                    {expandedBillId === b.id ? 'Show Less' : 'Read More'}
+                  </Text>
+                  <Ionicons
+                    name={expandedBillId === b.id ? 'chevron-up' : 'chevron-down'}
+                    size={14}
+                    color="#3A86FF"
+                  />
+                </TouchableOpacity>
+              </View>
+
+              {b.active && (
+                <TouchableOpacity
+                  style={styles.accordionPayButton}
+                  onPress={() => handlePayBill(b)}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.accordionPayButtonText}>Mark as Paid</Text>
+                </TouchableOpacity>
+              )}
+
+              {expandedBillId === b.id && (
+                <View style={styles.expandedSection}>
+                  {b.bill_type === 'installment' ? (
+                    <View style={styles.timelineContainer}>
+                      <Text style={styles.timelineTitle}>Installment Payment Progress</Text>
+                      <ScrollView
+                        horizontal
+                        showsHorizontalScrollIndicator={false}
+                        contentContainerStyle={styles.timelineScroll}
+                      >
+                        {Array.from({ length: b.total_tenor || 12 }, (_, i) => {
+                          const stepNum = i + 1;
+                          const isPaid = stepNum <= (b.current_tenor || 0);
+                          const historyStr = b.payment_history || '';
+                          const historyArray = historyStr ? historyStr.split('|||') : [];
+                          const paidDate = isPaid ? (historyArray[i] || 'Paid') : 'Unpaid';
+                          
+                          return (
+                            <View key={stepNum} style={styles.timelineStepWrapper}>
+                              <Text style={[styles.tenorLabel, isPaid && styles.tenorLabelActive]}>
+                                Month {stepNum}
+                              </Text>
+                              <Text style={[styles.tenorSubText, isPaid && styles.tenorSubTextActive]}>
+                                {paidDate}
+                              </Text>
+                              
+                              <View style={styles.nodeLineContainer}>
+                                <View style={[styles.nodeDot, isPaid ? styles.nodeDotActive : styles.nodeDotInactive]} />
+                                {stepNum < (b.total_tenor || 12) && (
+                                  <View style={[
+                                    styles.connectingLine, 
+                                    isPaid && stepNum < (b.current_tenor || 0) ? styles.connectingLineActive : styles.connectingLineInactive
+                                  ]} />
+                                )}
+                              </View>
+                            </View>
+                          );
+                        })}
+                      </ScrollView>
+                    </View>
+                  ) : (
+                    <View style={styles.subscriptionActiveBlock}>
+                      <Ionicons name="checkmark-circle" size={16} color="#10B981" style={{ marginRight: 6 }} />
+                      <Text style={styles.subscriptionActiveText}>
+                        Subscription Active • Recurring monthly bill
+                      </Text>
+                    </View>
+                  )}
+                </View>
+              )}
+            </View>
+          ))
+        )}
 
         {/* SPLIT BILLS CONTAINER HIDE SAAT SEE ALL */}
         {!isSeeAllActive && (
@@ -524,21 +810,45 @@ export default function BillsScreen() {
                   />
                 </View>
 
-                {/* b. Bill Type (Category): Dropdown Selector */}
+                {/* c. Bill Type Segmented Selector */}
                 <Text style={styles.fieldLabel}>Bill Type</Text>
+                <View style={styles.segmentedContainer}>
+                  <TouchableOpacity
+                    style={[styles.segmentedButton, billType === 'subscription' && styles.segmentedButtonActive]}
+                    onPress={() => setBillType('subscription')}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={[styles.segmentedButtonText, billType === 'subscription' && styles.segmentedButtonTextActive]}>
+                      Subscription
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.segmentedButton, billType === 'installment' && styles.segmentedButtonActive]}
+                    onPress={() => setBillType('installment')}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={[styles.segmentedButtonText, billType === 'installment' && styles.segmentedButtonTextActive]}>
+                      Installment
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+
+                {/* b. Bill Category: Dropdown Selector */}
+                <Text style={styles.fieldLabel}>Bill Category</Text>
                 <TouchableOpacity 
-                  style={[styles.capsuleInputWrapper, styles.capsuleInputRow]}
+                  style={[styles.capsuleInputWrapper, styles.capsuleInputRow, billType === 'installment' && { opacity: 0.6 }]}
                   activeOpacity={0.7}
                   onPress={() => setIsCategoryPickerOpen(!isCategoryPickerOpen)}
+                  disabled={billType === 'installment'}
                 >
                   <Text style={styles.capsuleInputText}>{category}</Text>
-                  <Ionicons name="chevron-down" size={16} color="#64748B" />
+                  {billType !== 'installment' && <Ionicons name="chevron-down" size={16} color="#64748B" />}
                 </TouchableOpacity>
 
                 {/* Dropdown Options for Category */}
                 {isCategoryPickerOpen && (
                   <View style={styles.dropdownOptionsContainer}>
-                    {['Subscription', 'Utility', 'Internet', 'Rent', 'Others'].map(cat => (
+                    {['Subscription', 'Utility', 'Internet', 'Rent', 'Installment', 'Others'].map(cat => (
                       <TouchableOpacity 
                         key={cat} 
                         style={styles.dropdownOption}
@@ -555,7 +865,67 @@ export default function BillsScreen() {
                   </View>
                 )}
 
-                {/* c. Amount (IDR): Capsule Input */}
+                {/* d. Source Wallet (Account Selection) */}
+                <Text style={styles.fieldLabel}>Source Wallet</Text>
+                <ScrollView 
+                  horizontal 
+                  showsHorizontalScrollIndicator={false} 
+                  contentContainerStyle={styles.accountSelectorScroll}
+                  style={{ marginTop: 2, marginBottom: 4 }}
+                >
+                  {accounts.map(acc => {
+                    const isSelected = selectedAccountId === acc.id;
+                    return (
+                      <TouchableOpacity
+                        key={acc.id}
+                        style={[
+                          styles.accountChip,
+                          isSelected ? styles.accountChipActive : styles.accountChipInactive
+                        ]}
+                        onPress={() => setSelectedAccountId(acc.id)}
+                        activeOpacity={0.8}
+                      >
+                        <Text style={[
+                          styles.accountChipText,
+                          isSelected ? styles.accountChipTextActive : styles.accountChipTextInactive
+                        ]}>
+                          {acc.name} ({formatIDR(acc.balance)})
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+
+                {billType === 'installment' && (
+                  <View style={styles.rowFields}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.fieldLabel}>Current Tenor Paid</Text>
+                      <View style={styles.capsuleInputWrapper}>
+                        <TextInput
+                          style={styles.capsuleInput}
+                          placeholder="0"
+                          keyboardType="numeric"
+                          value={currentTenor}
+                          onChangeText={setCurrentTenor}
+                        />
+                      </View>
+                    </View>
+                    <View style={{ flex: 1, marginLeft: 10 }}>
+                      <Text style={styles.fieldLabel}>Total Tenors</Text>
+                      <View style={styles.capsuleInputWrapper}>
+                        <TextInput
+                          style={styles.capsuleInput}
+                          placeholder="12"
+                          keyboardType="numeric"
+                          value={totalTenor}
+                          onChangeText={setTotalTenor}
+                        />
+                      </View>
+                    </View>
+                  </View>
+                )}
+
+                {/* d. Amount (IDR): Capsule Input */}
                 <Text style={styles.fieldLabel}>Amount (IDR)</Text>
                 <View style={styles.capsuleInputWrapper}>
                   <TextInput
@@ -564,7 +934,7 @@ export default function BillsScreen() {
                     placeholderTextColor="#94A3B8"
                     keyboardType="numeric"
                     value={billAmount}
-                    onChangeText={setBillAmount}
+                    onChangeText={(text) => setBillAmount(formatThousandsSeparator(text))}
                   />
                 </View>
 
@@ -714,7 +1084,8 @@ export default function BillsScreen() {
               <View style={styles.pickerDaysGrid}>
                 {pickerCalendarCells.map((day, idx) => {
                   const targetDate = datePickerTarget === 'start' ? startDate : endDate;
-                  const isSelected = day ? targetDate === `${pickerMonth.getFullYear()}-${String(pickerMonth.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}` : false;
+                  const sanitizedTargetDate = formatDateString(targetDate);
+                  const isSelected = day ? sanitizedTargetDate === `${pickerMonth.getFullYear()}-${String(pickerMonth.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}` : false;
 
                   return (
                     <TouchableOpacity
@@ -1395,6 +1766,15 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  cardPaidButton: {
+    backgroundColor: '#10B981',
+  },
+  cardPaidButtonText: {
+    fontFamily: 'System',
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
   cardEditButton: {
     backgroundColor: '#F1F5F9',
   },
@@ -1422,5 +1802,245 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
     color: '#64748B',
+  },
+  accountSelectorScroll: {
+    paddingVertical: 6,
+    gap: 8,
+  },
+  accountChip: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    borderWidth: 1.5,
+    marginRight: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  accountChipActive: {
+    backgroundColor: '#3A86FF',
+    borderColor: '#3A86FF',
+  },
+  accountChipInactive: {
+    backgroundColor: '#F1F5F9',
+    borderColor: '#E2E8F0',
+  },
+  accountChipText: {
+    fontFamily: 'System',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  accountChipTextActive: {
+    color: '#FFFFFF',
+  },
+  accountChipTextInactive: {
+    color: '#64748B',
+  },
+  segmentedContainer: {
+    flexDirection: 'row',
+    backgroundColor: '#EEF1F6',
+    borderRadius: 14,
+    padding: 4,
+    marginTop: 4,
+    marginBottom: 4,
+  },
+  segmentedButton: {
+    flex: 1,
+    height: 38,
+    borderRadius: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  segmentedButtonActive: {
+    backgroundColor: '#FFFFFF',
+    shadowColor: '#333D53',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  segmentedButtonText: {
+    fontFamily: 'System',
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#64748B',
+  },
+  segmentedButtonTextActive: {
+    color: '#3A86FF',
+  },
+  divider: {
+    height: 1,
+    backgroundColor: '#EEF1F6',
+    marginVertical: 10,
+  },
+  billCardFooter: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  expandButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: 4,
+    paddingHorizontal: 12,
+  },
+  expandButtonText: {
+    fontFamily: 'System',
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#3A86FF',
+  },
+  expandedSection: {
+    marginTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#F1F5F9',
+    paddingTop: 12,
+  },
+  timelineContainer: {
+    backgroundColor: '#FAFBFD',
+    borderRadius: 16,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#E7EAF3',
+  },
+  timelineTitle: {
+    fontFamily: 'System',
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#333D53',
+    marginBottom: 10,
+  },
+  timelineScroll: {
+    paddingVertical: 8,
+    paddingHorizontal: 4,
+  },
+  timelineStepWrapper: {
+    width: 90,
+    alignItems: 'center',
+    position: 'relative',
+    marginRight: 4,
+  },
+  tenorLabel: {
+    fontFamily: 'System',
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#94A3B8',
+    textAlign: 'center',
+  },
+  tenorLabelActive: {
+    color: '#3A86FF',
+  },
+  tenorSubText: {
+    fontFamily: 'System',
+    fontSize: 9,
+    fontWeight: '500',
+    color: '#94A3B8',
+    marginTop: 2,
+    textAlign: 'center',
+  },
+  tenorSubTextActive: {
+    color: '#3A86FF',
+  },
+  nodeLineContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '100%',
+    marginTop: 8,
+    position: 'relative',
+    height: 12,
+  },
+  nodeDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    zIndex: 2,
+  },
+  nodeDotActive: {
+    backgroundColor: '#3A86FF',
+  },
+  nodeDotInactive: {
+    backgroundColor: '#CBD5E1',
+  },
+  connectingLine: {
+    position: 'absolute',
+    left: '50%',
+    right: '-50%',
+    height: 2,
+    top: 4,
+    zIndex: 1,
+  },
+  connectingLineActive: {
+    backgroundColor: '#3A86FF',
+  },
+  connectingLineInactive: {
+    backgroundColor: '#E2E8F0',
+  },
+  subscriptionActiveBlock: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#ECFDF5',
+    borderColor: '#A7F3D0',
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 10,
+  },
+  subscriptionActiveText: {
+    fontFamily: 'System',
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#065F46',
+  },
+  accordionPayButton: {
+    backgroundColor: '#10B981',
+    borderRadius: 24,
+    height: 44,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 12,
+  },
+  accordionPayButtonText: {
+    fontFamily: 'System',
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  statusBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  statusBadgeOngoing: {
+    backgroundColor: '#FEF3C7',
+  },
+  statusBadgeCompleted: {
+    backgroundColor: '#D1FAE5',
+  },
+  statusBadgeText: {
+    fontFamily: 'System',
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  statusBadgeTextOngoing: {
+    color: '#F59E0B',
+  },
+  statusBadgeTextCompleted: {
+    color: '#059669',
+  },
+  emptyStateContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 40,
+    backgroundColor: '#F8F9FC',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#EEF1F6',
+    marginBottom: 12,
+  },
+  emptyStateText: {
+    fontFamily: 'System',
+    fontSize: 13,
+    color: '#94A3B8',
+    fontWeight: '500',
   },
 });

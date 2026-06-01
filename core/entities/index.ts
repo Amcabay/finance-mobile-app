@@ -49,4 +49,9 @@ export interface Bill {
   active: boolean;
   lastGeneratedMonth?: string; // YYYY-MM to prevent duplicate generation
   endDate?: string; // Format: YYYY-MM-DD
+  account_id?: string;
+  bill_type?: 'subscription' | 'installment';
+  payment_history?: string;
+  current_tenor?: number;
+  total_tenor?: number;
 }

@@ -17,8 +17,10 @@ import {
   ScrollView,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useFocusEffect } from '@react-navigation/native';
 import Svg, { Path, Defs, LinearGradient, Stop, Circle, Line, Text as SvgText, G } from 'react-native-svg';
 import { getDatabase } from '@/core/database/sqlite';
+import { formatIDR } from '@/core/formatters/currency';
 
 const { width: screenWidth } = Dimensions.get('window');
 const chartWidth = screenWidth - 40; // padding horizontal 20 + 20
@@ -31,9 +33,17 @@ interface Transaction {
   category: string;
   type: string;
   date: string;
+  account_id?: string;
 }
 
-const CATEGORIES = [
+interface Account {
+  id: string;
+  name: string;
+  type: string;
+  balance: number;
+}
+
+const EXPENSE_CATEGORIES = [
   { id: 'food', label: 'Food', icon: 'fast-food-outline', color: '#FF7A7A' },
   { id: 'shopping', label: 'Shopping', icon: 'shirt-outline', color: '#FFB067' },
   { id: 'transport', label: 'Transport', icon: 'car-sport-outline', color: '#52B6FF' },
@@ -45,6 +55,15 @@ const CATEGORIES = [
   { id: 'investment', label: 'Investment', icon: 'trending-up-outline', color: '#4DB6AC' },
   { id: 'others', label: 'Others', icon: 'options-outline', color: '#90A4AE' },
 ];
+
+const INCOME_CATEGORIES = [
+  { id: 'salary', label: 'Salary', icon: 'cash-outline', color: '#81C784' },
+  { id: 'investment', label: 'Investment', icon: 'trending-up-outline', color: '#4DB6AC' },
+  { id: 'freelance', label: 'Freelance', icon: 'briefcase-outline', color: '#FFB067' },
+  { id: 'others', label: 'Others', icon: 'help-outline', color: '#90A4AE' },
+];
+
+const CATEGORIES = EXPENSE_CATEGORIES;
 
 export default function SpendsScreen() {
   const [loading, setLoading] = useState(true);
@@ -73,7 +92,33 @@ export default function SpendsScreen() {
   const [amountInput, setAmountInput] = useState('');
   const [transactionName, setTransactionName] = useState('');
   const [extraDescription, setExtraDescription] = useState('');
-  const [selectedCategory, setSelectedCategory] = useState<typeof CATEGORIES[0] | null>(null);
+  const [selectedCategory, setSelectedCategory] = useState<typeof EXPENSE_CATEGORIES[0] | null>(null);
+
+  // Multi-wallet account states
+  const [accounts, setAccounts] = useState<Account[]>([]);
+  const [selectedAccountId, setSelectedAccountId] = useState('acc-cash');
+  const [transactionType, setTransactionType] = useState<'expense' | 'income'>('expense');
+
+  const categoriesList = useMemo(() => {
+    return transactionType === 'expense' ? EXPENSE_CATEGORIES : INCOME_CATEGORIES;
+  }, [transactionType]);
+
+  const loadAccounts = useCallback(async () => {
+    try {
+      const db = await getDatabase();
+      const rows = await db.getAllAsync<any>("SELECT * FROM accounts");
+      if (rows) {
+        setAccounts(rows.map(r => ({
+          id: r.id,
+          name: r.name,
+          type: r.type,
+          balance: Number(r.balance),
+        })));
+      }
+    } catch (error) {
+      console.error('Failed to load accounts:', error);
+    }
+  }, []);
 
   const loadLocalTransactions = useCallback(async () => {
     try {
@@ -83,7 +128,7 @@ export default function SpendsScreen() {
         ['offline-user']
       );
 
-      if (rows && rows.length > 0) {
+      if (rows) {
         setTransactions(rows.map(r => ({
           id: r.id,
           description: r.description,
@@ -91,29 +136,10 @@ export default function SpendsScreen() {
           category: r.category,
           type: r.type,
           date: r.date,
+          account_id: r.account_id || 'acc-cash',
         })));
       } else {
-        // Seeding awal transaksi offline default jika tabel masih kosong (Beli pc & Beli ayam goyeng)
-        const defaultTrans = [
-          { id: '1', user_id: 'offline-user', description: 'Beli pc|||Beli komputer untuk kerja', amount: 15000000, category: 'Shopping', type: 'expense', date: '2026-05-28' },
-          { id: '2', user_id: 'offline-user', description: 'Beli ayam goyeng|||Makan malam keluarga', amount: 85000, category: 'Food', type: 'expense', date: '2026-05-28' },
-        ];
-
-        for (const t of defaultTrans) {
-          await db.runAsync(
-            "INSERT INTO transactions (id, user_id, description, amount, category, type, date) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            [t.id, t.user_id, t.description, t.amount, t.category, t.type, t.date]
-          );
-        }
-
-        setTransactions(defaultTrans.map(t => ({
-          id: t.id,
-          description: t.description,
-          amount: t.amount,
-          category: t.category,
-          type: t.type,
-          date: t.date,
-        })));
+        setTransactions([]);
       }
     } catch (error) {
       console.error('Failed to load transactions:', error);
@@ -122,19 +148,30 @@ export default function SpendsScreen() {
     }
   }, []);
 
-  useEffect(() => {
-    loadLocalTransactions();
-  }, [loadLocalTransactions]);
+  useFocusEffect(
+    useCallback(() => {
+      loadLocalTransactions();
+      loadAccounts();
+    }, [loadLocalTransactions, loadAccounts])
+  );
 
   const getCategoryDetails = (catName: string) => {
-    const match = CATEGORIES.find(
+    const combined = [...EXPENSE_CATEGORIES, ...INCOME_CATEGORIES];
+    const match = combined.find(
       c => c.id === catName.toLowerCase() || c.label.toLowerCase() === catName.toLowerCase()
     );
-    return match || CATEGORIES[CATEGORIES.length - 1]; // Fallback to Others
+    return match || EXPENSE_CATEGORIES[EXPENSE_CATEGORIES.length - 1]; // Fallback to Others
+  };
+
+  const formatThousandsSeparator = (value: string) => {
+    const cleanValue = value.replace(/\D/g, '');
+    if (!cleanValue) return '';
+    return Number(cleanValue).toLocaleString('id-ID');
   };
 
   const handleConfirmTransaction = async () => {
-    const rawAmount = parseFloat(amountInput);
+    const cleanAmountStr = amountInput.replace(/\./g, '');
+    const rawAmount = parseFloat(cleanAmountStr);
     if (isNaN(rawAmount) || rawAmount <= 0) {
       Alert.alert('Error', 'Please enter a valid amount');
       return;
@@ -162,19 +199,35 @@ export default function SpendsScreen() {
             description = ?, 
             amount = ?, 
             category = ?, 
-            date = ? 
+            date = ?,
+            account_id = ?,
+            type = ?
           WHERE id = ?`,
-          [combinedDescription, rawAmount, selectedCategory.label, todayStr, editingTransactionId]
+          [combinedDescription, rawAmount, selectedCategory.label, todayStr, selectedAccountId, transactionType, editingTransactionId]
         );
       } else {
         const newId = String(Date.now());
+        // Insert transaction with dynamic type and account_id
         await db.runAsync(
-          "INSERT INTO transactions (id, user_id, description, amount, category, type, date) VALUES (?, ?, ?, ?, ?, ?, ?)",
-          [newId, 'offline-user', combinedDescription, rawAmount, selectedCategory.label, 'expense', todayStr]
+          "INSERT INTO transactions (id, user_id, description, amount, category, type, date, account_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+          [newId, 'offline-user', combinedDescription, rawAmount, selectedCategory.label, transactionType, todayStr, selectedAccountId]
         );
+        // Reconcile/Deduct account balance
+        if (transactionType === 'expense') {
+          await db.runAsync(
+            "UPDATE accounts SET balance = balance - ? WHERE id = ?",
+            [rawAmount, selectedAccountId]
+          );
+        } else {
+          await db.runAsync(
+            "UPDATE accounts SET balance = balance + ? WHERE id = ?",
+            [rawAmount, selectedAccountId]
+          );
+        }
       }
 
       loadLocalTransactions();
+      loadAccounts();
       setIsModalOpen(false);
       resetForm();
     } catch (error) {
@@ -192,11 +245,13 @@ export default function SpendsScreen() {
 
     setEditingTransactionId(selectedMenuTransaction.id);
     setTransactionName(name);
-    setAmountInput(String(selectedMenuTransaction.amount));
+    setAmountInput(formatThousandsSeparator(String(selectedMenuTransaction.amount)));
     setExtraDescription(extra);
 
     const catDetails = getCategoryDetails(selectedMenuTransaction.category);
     setSelectedCategory(catDetails);
+    setSelectedAccountId(selectedMenuTransaction.account_id || 'acc-cash');
+    setTransactionType(selectedMenuTransaction.type === 'income' ? 'income' : 'expense');
     
     setIsMenuOpen(false);
     setIsModalOpen(true);
@@ -216,10 +271,32 @@ export default function SpendsScreen() {
           onPress: async () => {
             try {
               const db = await getDatabase();
-              await db.runAsync("DELETE FROM transactions WHERE id = ?", [selectedMenuTransaction.id]);
+              const amountVal = selectedMenuTransaction.amount;
+              const accountId = selectedMenuTransaction.account_id || 'acc-cash';
+              const type = selectedMenuTransaction.type;
+
+              await db.withTransactionAsync(async () => {
+                // Reverse transaction balance effect on target wallet account
+                if (type === 'expense') {
+                  await db.runAsync(
+                    "UPDATE accounts SET balance = balance + ? WHERE id = ?",
+                    [amountVal, accountId]
+                  );
+                } else {
+                  await db.runAsync(
+                    "UPDATE accounts SET balance = balance - ? WHERE id = ?",
+                    [amountVal, accountId]
+                  );
+                }
+                
+                // Now delete the transaction cleanly
+                await db.runAsync("DELETE FROM transactions WHERE id = ?", [selectedMenuTransaction.id]);
+              });
+
               setIsMenuOpen(false);
               setSelectedMenuTransaction(null);
-              loadLocalTransactions();
+              await loadLocalTransactions();
+              await loadAccounts(); // Refresh accounts as well
             } catch (error) {
               console.error('Failed to delete transaction:', error);
               Alert.alert('Error', 'Failed to delete transaction');
@@ -237,6 +314,8 @@ export default function SpendsScreen() {
     setExtraDescription('');
     setSelectedCategory(null);
     setIsCategoryPickerOpen(false);
+    setSelectedAccountId('acc-cash');
+    setTransactionType('expense');
   };
 
   const openFilterModal = () => {
@@ -604,7 +683,7 @@ export default function SpendsScreen() {
         showsVerticalScrollIndicator={false}
         ListEmptyComponent={
           <View style={styles.emptyState}>
-            <Text style={styles.emptyStateText}>No Spends recorded yet</Text>
+            <Text style={styles.emptyStateText}>No transactions yet. Record your first income or expense!</Text>
           </View>
         }
       />
@@ -646,6 +725,47 @@ export default function SpendsScreen() {
             </View>
 
             <View style={styles.modalForm}>
+              {/* TRANSACTION TYPE SELECTOR */}
+              <View style={styles.typeSelectorWrapper}>
+                <TouchableOpacity
+                  style={[
+                    styles.typeSelectorTab,
+                    transactionType === 'expense' ? styles.typeSelectorTabActiveExpense : styles.typeSelectorTabInactive
+                  ]}
+                  onPress={() => {
+                    setTransactionType('expense');
+                    setSelectedCategory(null); // Reset category selection when swapping types
+                  }}
+                  activeOpacity={0.8}
+                >
+                  <Text style={[
+                    styles.typeSelectorText,
+                    transactionType === 'expense' ? styles.typeSelectorTextActive : styles.typeSelectorTextInactive
+                  ]}>
+                    Outcome
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[
+                    styles.typeSelectorTab,
+                    transactionType === 'income' ? styles.typeSelectorTabActiveIncome : styles.typeSelectorTabInactive
+                  ]}
+                  onPress={() => {
+                    setTransactionType('income');
+                    setSelectedCategory(null); // Reset category selection when swapping types
+                  }}
+                  activeOpacity={0.8}
+                >
+                  <Text style={[
+                    styles.typeSelectorText,
+                    transactionType === 'income' ? styles.typeSelectorTextActive : styles.typeSelectorTextInactive
+                  ]}>
+                    Income
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
               {/* TRANSACTION NAME & CATEGORY PICKER LAUNCHER */}
               <View style={styles.topFieldWrapper}>
                 <TouchableOpacity 
@@ -671,12 +791,12 @@ export default function SpendsScreen() {
                 />
               </View>
 
-              {/* GRID 10 KATEGORI SUB-MENU */}
+              {/* GRID CATEGORI SUB-MENU */}
               {isCategoryPickerOpen && (
                 <View style={styles.categoryGridContainer}>
                   <Text style={styles.categoryGridTitle}>Select Category</Text>
                   <View style={styles.categoriesGrid}>
-                    {CATEGORIES.map(cat => (
+                    {categoriesList.map(cat => (
                       <TouchableOpacity
                         key={cat.id}
                         style={[
@@ -708,8 +828,47 @@ export default function SpendsScreen() {
                     placeholderTextColor="#94A3B8"
                     keyboardType="numeric"
                     value={amountInput}
-                    onChangeText={setAmountInput}
+                    onChangeText={(text) => setAmountInput(formatThousandsSeparator(text))}
                   />
+                </View>
+
+                {/* MULTI-WALLET (ACCOUNT) SELECTOR */}
+                <View style={styles.accountSelectorWrapper}>
+                  <Text style={styles.formLabel}>Source Wallet</Text>
+                  <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    contentContainerStyle={styles.accountsScrollContent}
+                    style={styles.accountsScrollView}
+                  >
+                    {accounts.map(acc => {
+                      const isSelected = selectedAccountId === acc.id;
+                      return (
+                        <TouchableOpacity
+                          key={acc.id}
+                          style={[
+                            styles.accountChip,
+                            isSelected ? styles.accountChipActive : styles.accountChipInactive
+                          ]}
+                          onPress={() => setSelectedAccountId(acc.id)}
+                          activeOpacity={0.7}
+                        >
+                          <Text style={[
+                            styles.accountChipText,
+                            isSelected ? styles.accountChipTextActive : styles.accountChipTextInactive
+                          ]}>
+                            {acc.name}
+                          </Text>
+                          <Text style={[
+                            styles.accountChipBalance,
+                            isSelected ? styles.accountChipBalanceActive : styles.accountChipBalanceInactive
+                          ]}>
+                            {formatIDR(acc.balance)}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </ScrollView>
                 </View>
 
                 <View style={styles.capsuleInputWrapper}>
@@ -1110,12 +1269,16 @@ const styles = StyleSheet.create({
   emptyState: {
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 40,
+    paddingVertical: 60,
+    paddingHorizontal: 24,
   },
   emptyStateText: {
     fontFamily: 'System',
     fontSize: 13,
     color: '#94A3B8',
+    textAlign: 'center',
+    lineHeight: 18,
+    fontWeight: '500',
   },
   fab: {
     width: 50,
@@ -1471,5 +1634,115 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
     color: '#FFFFFF',
+  },
+  // MULTI-WALLET ACCOUNT SELECTOR STYLES
+  accountSelectorWrapper: {
+    marginVertical: 4,
+  },
+  formLabel: {
+    fontFamily: 'System',
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#64748B',
+    marginBottom: 8,
+    paddingHorizontal: 4,
+  },
+  accountsScrollView: {
+    flexGrow: 0,
+  },
+  accountsScrollContent: {
+    paddingHorizontal: 4,
+    gap: 8,
+    flexDirection: 'row',
+  },
+  accountChip: {
+    borderRadius: 14,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderWidth: 1,
+    minWidth: 100,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  accountChipActive: {
+    backgroundColor: '#2F95F6',
+    borderColor: '#2F95F6',
+    shadowColor: '#2F95F6',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  accountChipInactive: {
+    backgroundColor: '#EEF1F6',
+    borderColor: '#CBD5E1',
+  },
+  accountChipText: {
+    fontFamily: 'System',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  accountChipTextActive: {
+    color: '#FFFFFF',
+  },
+  accountChipTextInactive: {
+    color: '#1E293B',
+  },
+  accountChipBalance: {
+    fontFamily: 'System',
+    fontSize: 11,
+    marginTop: 2,
+  },
+  accountChipBalanceActive: {
+    color: '#E0F2FE',
+    fontWeight: '500',
+  },
+  accountChipBalanceInactive: {
+    color: '#64748B',
+  },
+  // TRANSACTION TYPE SELECTOR STYLES
+  typeSelectorWrapper: {
+    flexDirection: 'row',
+    backgroundColor: '#EEF1F6',
+    borderRadius: 16,
+    padding: 4,
+    gap: 4,
+  },
+  typeSelectorTab: {
+    flex: 1,
+    height: 38,
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  typeSelectorTabActiveExpense: {
+    backgroundColor: '#EF4444',
+    shadowColor: '#EF4444',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  typeSelectorTabActiveIncome: {
+    backgroundColor: '#10B981',
+    shadowColor: '#10B981',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  typeSelectorTabInactive: {
+    backgroundColor: 'transparent',
+  },
+  typeSelectorText: {
+    fontFamily: 'System',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  typeSelectorTextActive: {
+    color: '#FFFFFF',
+  },
+  typeSelectorTextInactive: {
+    color: '#64748B',
   },
 });

@@ -27,8 +27,8 @@ export class BillRepository {
 
     await db.runAsync(
       `INSERT INTO bills (
-        id, user_id, name, amount, category, frequency, billing_day, active, last_generated_month, end_date, sync_status
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
+        id, user_id, name, amount, category, frequency, billing_day, active, last_generated_month, end_date, sync_status, account_id, bill_type, payment_history, current_tenor, total_tenor
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)`,
       [
         id,
         userId,
@@ -39,7 +39,12 @@ export class BillRepository {
         bill.billing_day,
         bill.active ? 1 : 0,
         bill.lastGeneratedMonth || null,
-        bill.endDate || null
+        bill.endDate || null,
+        bill.account_id || null,
+        bill.bill_type || 'subscription',
+        bill.payment_history || null,
+        bill.current_tenor !== undefined ? bill.current_tenor : 0,
+        bill.total_tenor !== undefined ? bill.total_tenor : 12
       ]
     );
 
@@ -48,7 +53,12 @@ export class BillRepository {
       id,
       userId,
       amount: bill.amount,
-      active: bill.active
+      active: bill.active,
+      account_id: bill.account_id,
+      bill_type: bill.bill_type,
+      payment_history: bill.payment_history,
+      current_tenor: bill.current_tenor,
+      total_tenor: bill.total_tenor
     };
   }
 
@@ -72,7 +82,12 @@ export class BillRepository {
       active: row.active === 1,
       lastGeneratedMonth: row.last_generated_month || undefined,
       endDate: row.end_date || undefined,
-      sync_status: row.sync_status
+      sync_status: row.sync_status,
+      account_id: row.account_id || undefined,
+      bill_type: row.bill_type || 'subscription',
+      payment_history: row.payment_history || undefined,
+      current_tenor: row.current_tenor || 0,
+      total_tenor: row.total_tenor || 12
     }));
   }
 
@@ -107,7 +122,12 @@ export class BillRepository {
       billing_day: row.billing_day,
       active: row.active === 1,
       lastGeneratedMonth: row.last_generated_month || undefined,
-      endDate: row.end_date || undefined
+      endDate: row.end_date || undefined,
+      account_id: row.account_id || undefined,
+      bill_type: row.bill_type || 'subscription',
+      payment_history: row.payment_history || undefined,
+      current_tenor: row.current_tenor || 0,
+      total_tenor: row.total_tenor || 12
     }));
   }
 }
