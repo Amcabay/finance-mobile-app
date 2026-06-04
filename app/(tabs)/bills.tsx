@@ -13,11 +13,14 @@ import {
   StatusBar,
   Image,
   KeyboardAvoidingView,
+  Switch,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { BillRepository } from '@/features/bills/repository/BillRepository';
 import { formatIDR } from '@/core/formatters/currency';
 import { getDatabase } from '@/core/database/sqlite';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import DataSettingsSheet from '@/components/DataSettingsSheet';
 
 const billRepository = new BillRepository();
 
@@ -43,6 +46,8 @@ export default function BillsScreen() {
   const [bills, setBills] = useState<any[]>([]);
   const [isAdding, setIsAdding] = useState(false);
   const [isSeeAllActive, setIsSeeAllActive] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [totalTxsCount, setTotalTxsCount] = useState(0);
 
   // CRUD & Menu States
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -76,6 +81,8 @@ export default function BillsScreen() {
   const [datePickerTarget, setDatePickerTarget] = useState<'start' | 'end' | null>(null);
   const [pickerMonth, setPickerMonth] = useState<Date>(() => new Date());
 
+
+
   const today = useMemo(() => new Date(), []);
   const currentDay = today.getDate();
 
@@ -105,6 +112,7 @@ export default function BillsScreen() {
         "SELECT COUNT(*) as count FROM transactions"
       );
       const txCount = txCountRows[0]?.count || 0;
+      setTotalTxsCount(txCount);
       if (txCount === 0) {
         await db.runAsync("UPDATE accounts SET balance = 0");
       }
@@ -136,6 +144,8 @@ export default function BillsScreen() {
       setCategory('Subscription');
     }
   }, [billType]);
+
+
 
   // Hitung tagihan yang terlambat
   const lateBills = useMemo(() => {
@@ -452,6 +462,8 @@ export default function BillsScreen() {
     );
   };
 
+
+
   const resetForm = () => {
     setEditingBillId(null);
     setBillName('');
@@ -487,18 +499,13 @@ export default function BillsScreen() {
       >
         {/* SINKRONISASI HEADER ATAS */}
         <View style={styles.topHeader}>
-          <View style={styles.profileRow}>
-            <Image
-              source={{ uri: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=100&q=80' }}
-              style={styles.avatar}
-            />
-            <TouchableOpacity activeOpacity={0.7} style={styles.profileEditWrapper}>
-              <Text style={styles.editAccountText}>Edit your account</Text>
-              <Ionicons name="chevron-forward" size={12} color="#64748B" style={{ marginLeft: 2 }} />
-            </TouchableOpacity>
-          </View>
-          <TouchableOpacity style={styles.settingsButton} activeOpacity={0.7}>
-            <Ionicons name="settings-outline" size={24} color="#1E293B" />
+          <Text style={styles.headerTitle}>Bills</Text>
+          <TouchableOpacity 
+            style={styles.compactSettingsButton} 
+            activeOpacity={0.7}
+            onPress={() => setIsSettingsOpen(true)}
+          >
+            <Ionicons name="settings-outline" size={22} color="#1E293B" />
           </TouchableOpacity>
         </View>
 
@@ -738,20 +745,6 @@ export default function BillsScreen() {
           ))
         )}
 
-        {/* SPLIT BILLS CONTAINER HIDE SAAT SEE ALL */}
-        {!isSeeAllActive && (
-          <View style={styles.splitBillsCard}>
-            <Text style={styles.splitBillsTitle}>Split Bills</Text>
-            <View style={styles.splitBillsContent}>
-              <Text style={styles.splitBillsMainText}>No Split Bills yet</Text>
-              <Text style={styles.splitBillsSubText}>You can now split bill by using camera</Text>
-            </View>
-            {/* Action FAB Mini */}
-            <TouchableOpacity style={styles.miniFab} activeOpacity={0.8}>
-              <Ionicons name="add" size={18} color="#FFFFFF" />
-            </TouchableOpacity>
-          </View>
-        )}
       </ScrollView>
 
       {/* FLOATING ACTION BUTTON (FAB) - TETAP MUNCUL SELAMA SEE ALL */}
@@ -795,7 +788,7 @@ export default function BillsScreen() {
               </TouchableOpacity>
             </View>
 
-            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.formScroll}>
+            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={[styles.formScroll, { paddingBottom: 80 }]}>
               <View style={styles.formContainer}>
                 
                 {/* a. Nama Tagihan: Underline Input */}
@@ -833,37 +826,103 @@ export default function BillsScreen() {
                   </TouchableOpacity>
                 </View>
 
-                {/* b. Bill Category: Dropdown Selector */}
-                <Text style={styles.fieldLabel}>Bill Category</Text>
-                <TouchableOpacity 
-                  style={[styles.capsuleInputWrapper, styles.capsuleInputRow, billType === 'installment' && { opacity: 0.6 }]}
-                  activeOpacity={0.7}
-                  onPress={() => setIsCategoryPickerOpen(!isCategoryPickerOpen)}
-                  disabled={billType === 'installment'}
-                >
-                  <Text style={styles.capsuleInputText}>{category}</Text>
-                  {billType !== 'installment' && <Ionicons name="chevron-down" size={16} color="#64748B" />}
-                </TouchableOpacity>
+                {/* b. Bill Category: Dropdown Selector (Hides gracefully if Bill Type is Installment) */}
+                {billType !== 'installment' && (
+                  <>
+                    <Text style={styles.fieldLabel}>Bill Category</Text>
+                    <TouchableOpacity 
+                      style={[styles.capsuleInputWrapper, styles.capsuleInputRow]}
+                      activeOpacity={0.7}
+                      onPress={() => setIsCategoryPickerOpen(!isCategoryPickerOpen)}
+                    >
+                      <Text style={styles.capsuleInputText}>{category}</Text>
+                      <Ionicons name="chevron-down" size={16} color="#64748B" />
+                    </TouchableOpacity>
 
-                {/* Dropdown Options for Category */}
-                {isCategoryPickerOpen && (
-                  <View style={styles.dropdownOptionsContainer}>
-                    {['Subscription', 'Utility', 'Internet', 'Rent', 'Installment', 'Others'].map(cat => (
-                      <TouchableOpacity 
-                        key={cat} 
-                        style={styles.dropdownOption}
-                        onPress={() => {
-                          setCategory(cat);
-                          setIsCategoryPickerOpen(false);
-                        }}
-                      >
-                        <Text style={[styles.dropdownOptionText, category === cat && styles.dropdownOptionTextActive]}>
-                          {cat}
-                        </Text>
-                      </TouchableOpacity>
-                    ))}
+                    {/* Dropdown Options for Category */}
+                    {isCategoryPickerOpen && (
+                      <View style={styles.dropdownOptionsContainer}>
+                        {['Subscription', 'Utility', 'Internet', 'Rent', 'Others'].map(cat => (
+                          <TouchableOpacity 
+                            key={cat} 
+                            style={styles.dropdownOption}
+                            onPress={() => {
+                              setCategory(cat);
+                              setIsCategoryPickerOpen(false);
+                            }}
+                          >
+                            <Text style={[styles.dropdownOptionText, category === cat && styles.dropdownOptionTextActive]}>
+                              {cat}
+                            </Text>
+                          </TouchableOpacity>
+                        ))}
+                      </View>
+                    )}
+                  </>
+                )}
+
+                {/* d. Amount (IDR): Capsule Input */}
+                <Text style={styles.fieldLabel}>Amount (IDR)</Text>
+                <View style={styles.capsuleInputWrapper}>
+                  <TextInput
+                    style={styles.capsuleInput}
+                    placeholder="Amount (IDR)"
+                    placeholderTextColor="#94A3B8"
+                    keyboardType="numeric"
+                    value={billAmount}
+                    onChangeText={(text) => setBillAmount(formatThousandsSeparator(text))}
+                  />
+                </View>
+
+                {/* Installment Tenor: Triggered only if type is installment */}
+                {billType === 'installment' && (
+                  <View style={styles.rowFields}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.fieldLabel}>Current Tenor Paid</Text>
+                      <View style={styles.capsuleInputWrapper}>
+                        <TextInput
+                          style={styles.capsuleInput}
+                          placeholder="0"
+                          keyboardType="numeric"
+                          value={currentTenor}
+                          onChangeText={setCurrentTenor}
+                        />
+                      </View>
+                    </View>
+                    <View style={{ flex: 1, marginLeft: 10 }}>
+                      <Text style={styles.fieldLabel}>Total Tenors</Text>
+                      <View style={styles.capsuleInputWrapper}>
+                        <TextInput
+                          style={styles.capsuleInput}
+                          placeholder="12"
+                          keyboardType="numeric"
+                          value={totalTenor}
+                          onChangeText={setTotalTenor}
+                        />
+                      </View>
+                    </View>
                   </View>
                 )}
+
+                {/* e. Billing Day & Cycle Dropdown side-by-side */}
+                <Text style={styles.fieldLabel}>Billing Day & Cycle</Text>
+                <View style={styles.rowFields}>
+                  <View style={[styles.capsuleInputWrapper, { flex: 1 }]}>
+                    <TextInput
+                      style={styles.capsuleInput}
+                      placeholder="Billing Day (1-31)"
+                      placeholderTextColor="#94A3B8"
+                      keyboardType="numeric"
+                      value={billingDay}
+                      onChangeText={setBillingDay}
+                    />
+                  </View>
+                  <View style={[styles.capsuleInputWrapper, { width: 100, marginLeft: 10 }]}>
+                    <Text style={styles.capsuleInputText}>
+                      {installment === 'yearly' ? 'Year' : 'Month'}
+                    </Text>
+                  </View>
+                </View>
 
                 {/* d. Source Wallet (Account Selection) */}
                 <Text style={styles.fieldLabel}>Source Wallet</Text>
@@ -895,48 +954,6 @@ export default function BillsScreen() {
                     );
                   })}
                 </ScrollView>
-
-                {billType === 'installment' && (
-                  <View style={styles.rowFields}>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.fieldLabel}>Current Tenor Paid</Text>
-                      <View style={styles.capsuleInputWrapper}>
-                        <TextInput
-                          style={styles.capsuleInput}
-                          placeholder="0"
-                          keyboardType="numeric"
-                          value={currentTenor}
-                          onChangeText={setCurrentTenor}
-                        />
-                      </View>
-                    </View>
-                    <View style={{ flex: 1, marginLeft: 10 }}>
-                      <Text style={styles.fieldLabel}>Total Tenors</Text>
-                      <View style={styles.capsuleInputWrapper}>
-                        <TextInput
-                          style={styles.capsuleInput}
-                          placeholder="12"
-                          keyboardType="numeric"
-                          value={totalTenor}
-                          onChangeText={setTotalTenor}
-                        />
-                      </View>
-                    </View>
-                  </View>
-                )}
-
-                {/* d. Amount (IDR): Capsule Input */}
-                <Text style={styles.fieldLabel}>Amount (IDR)</Text>
-                <View style={styles.capsuleInputWrapper}>
-                  <TextInput
-                    style={styles.capsuleInput}
-                    placeholder="Amount (IDR)"
-                    placeholderTextColor="#94A3B8"
-                    keyboardType="numeric"
-                    value={billAmount}
-                    onChangeText={(text) => setBillAmount(formatThousandsSeparator(text))}
-                  />
-                </View>
 
                 {/* d. Installment (Frequency): Capsule Input dropdown */}
                 <Text style={styles.fieldLabel}>Installment Cycle</Text>
@@ -974,26 +991,6 @@ export default function BillsScreen() {
                   </View>
                 )}
 
-                {/* e. Billing Day & Cycle Dropdown side-by-side */}
-                <Text style={styles.fieldLabel}>Billing Day & Cycle</Text>
-                <View style={styles.rowFields}>
-                  <View style={[styles.capsuleInputWrapper, { flex: 1 }]}>
-                    <TextInput
-                      style={styles.capsuleInput}
-                      placeholder="Billing Day (1-31)"
-                      placeholderTextColor="#94A3B8"
-                      keyboardType="numeric"
-                      value={billingDay}
-                      onChangeText={setBillingDay}
-                    />
-                  </View>
-                  <View style={[styles.capsuleInputWrapper, { width: 100, marginLeft: 10 }]}>
-                    <Text style={styles.capsuleInputText}>
-                      {installment === 'yearly' ? 'Year' : 'Month'}
-                    </Text>
-                  </View>
-                </View>
-
                 {/* f. Start & End Date Capsule Pickers */}
                 <View style={styles.rowFields}>
                   <View style={{ flex: 1 }}>
@@ -1029,18 +1026,17 @@ export default function BillsScreen() {
                     </TouchableOpacity>
                   </View>
                 </View>
-
               </View>
-            </ScrollView>
 
-            {/* Tombol Confirm Full-width */}
-            <TouchableOpacity 
-              style={styles.confirmButton} 
-              activeOpacity={0.8}
-              onPress={handleAddBill}
-            >
-              <Text style={styles.confirmButtonText}>Confirm</Text>
-            </TouchableOpacity>
+              {/* Tombol Confirm Full-width */}
+              <TouchableOpacity 
+                style={styles.confirmButton} 
+                activeOpacity={0.8}
+                onPress={handleAddBill}
+              >
+                <Text style={styles.confirmButtonText}>Confirm</Text>
+              </TouchableOpacity>
+            </ScrollView>
           </KeyboardAvoidingView>
         </View>
       </Modal>
@@ -1166,6 +1162,16 @@ export default function BillsScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* SETTINGS MODAL */}
+      <DataSettingsSheet
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+        onDataChange={() => {
+          loadOfflineBills();
+          loadAccounts();
+        }}
+      />
     </View>
   );
 }
@@ -1196,28 +1202,22 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 20,
   },
-  profileRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  avatar: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    marginRight: 8,
-  },
-  profileEditWrapper: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  editAccountText: {
+  headerTitle: {
     fontFamily: 'System',
-    fontSize: 14,
-    fontWeight: '400',
-    color: '#64748B',
+    fontSize: 24,
+    fontWeight: '800',
+    color: '#1E293B',
   },
-  settingsButton: {
-    padding: 4,
+  compactProfileButton: {
+    padding: 2,
+    borderRadius: 18,
+    borderWidth: 1.5,
+    borderColor: '#E2E8F0',
+  },
+  compactAvatar: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
   },
   welcomeBanner: {
     borderRadius: 20,
@@ -1377,56 +1377,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
     color: '#3A86FF',
-  },
-  splitBillsCard: {
-    borderRadius: 20,
-    backgroundColor: '#F8F9FC',
-    padding: 16,
-    alignItems: 'center',
-    position: 'relative',
-    marginTop: 12,
-    borderWidth: 1,
-    borderColor: '#EEF1F6',
-  },
-  splitBillsTitle: {
-    alignSelf: 'flex-start',
-    fontFamily: 'System',
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#333D53',
-    marginBottom: 12,
-  },
-  splitBillsContent: {
-    alignItems: 'center',
-    marginVertical: 8,
-  },
-  splitBillsMainText: {
-    fontFamily: 'System',
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#64748B',
-  },
-  splitBillsSubText: {
-    fontFamily: 'System',
-    fontSize: 11,
-    color: '#94A3B8',
-    marginTop: 2,
-  },
-  miniFab: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#3A86FF',
-    position: 'absolute',
-    bottom: 16,
-    right: 16,
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#3A86FF',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    elevation: 3,
   },
   fab: {
     width: 50,
@@ -2043,4 +1993,12 @@ const styles = StyleSheet.create({
     color: '#94A3B8',
     fontWeight: '500',
   },
+  compactSettingsButton: {
+    padding: 6,
+    borderRadius: 12,
+    backgroundColor: '#EEF1F6',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+
 });

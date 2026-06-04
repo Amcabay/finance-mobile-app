@@ -1,8 +1,18 @@
 import { Feather, Ionicons } from '@expo/vector-icons';
 import { BottomTabBarProps } from '@react-navigation/bottom-tabs';
-import { Tabs } from 'expo-router';
+import { Tabs, useNavigation } from 'expo-router';
 import React from 'react';
-import { Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Platform, StyleSheet, Text, TouchableOpacity, View, Dimensions } from 'react-native';
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withSpring,
+} from 'react-native-reanimated';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { BillRepository } from '@/features/bills/repository/BillRepository';
+import { scheduleBillReminders } from '@/core/services/notificationService';
+
+const { width: screenWidth } = Dimensions.get('window');
 
 const TAB_INFO: Record<string, { label: string; renderIcon: (color: string, size: number) => React.ReactNode }> = {
   index: {
@@ -21,6 +31,27 @@ const TAB_INFO: Record<string, { label: string; renderIcon: (color: string, size
     label: 'Bills',
     renderIcon: (color, size) => <Ionicons name="card-outline" size={size + 2} color={color} />,
   },
+};
+
+const ActiveTabPill = ({ info }: { info: any }) => {
+  const scale = useSharedValue(0.9);
+
+  React.useEffect(() => {
+    scale.value = withSpring(1.0, { mass: 0.5, damping: 10, stiffness: 130 });
+  }, []);
+
+  const animatedStyle = useAnimatedStyle(() => {
+    return {
+      transform: [{ scale: scale.value }],
+    };
+  });
+
+  return (
+    <Animated.View style={[styles.activePill, animatedStyle]}>
+      {info.renderIcon('#333D53', 18)}
+      <Text style={styles.activeLabel}>{info.label}</Text>
+    </Animated.View>
+  );
 };
 
 function CustomTabBar({ state, descriptors, navigation }: BottomTabBarProps) {
@@ -64,10 +95,7 @@ function CustomTabBar({ state, descriptors, navigation }: BottomTabBarProps) {
             activeOpacity={0.85}
           >
             {isFocused ? (
-              <View style={styles.activePill}>
-                {info.renderIcon('#333D53', 16)}
-                <Text style={styles.activeLabel}>{info.label}</Text>
-              </View>
+              <ActiveTabPill info={info} />
             ) : (
               <View style={styles.inactiveCircle}>
                 {info.renderIcon('#333D53', 18)}
@@ -81,6 +109,32 @@ function CustomTabBar({ state, descriptors, navigation }: BottomTabBarProps) {
 }
 
 export default function TabLayout() {
+  const navigation = useNavigation();
+
+  React.useEffect(() => {
+    const syncReminders = async () => {
+      try {
+        const storedEnabled = await AsyncStorage.getItem('isReminderEnabled');
+        if (storedEnabled === 'true') {
+          const storedStrategy = await AsyncStorage.getItem('reminderStrategy') || 'H-1';
+          const billRepository = new BillRepository();
+          const dbBills = await billRepository.getBills('offline-user');
+          await scheduleBillReminders(dbBills || [], storedStrategy as any);
+        }
+      } catch (error) {
+        console.error('Global bill notification sync failed:', error);
+      }
+    };
+
+    syncReminders();
+
+    const unsubscribe = navigation.addListener('state', () => {
+      syncReminders();
+    });
+
+    return unsubscribe;
+  }, [navigation]);
+
   return (
     <Tabs
       tabBar={(props) => <CustomTabBar {...props} />}

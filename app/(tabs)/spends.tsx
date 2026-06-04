@@ -15,14 +15,152 @@ import {
   Image,
   Dimensions,
   ScrollView,
+  Pressable,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
-import Svg, { Path, Defs, LinearGradient, Stop, Circle, Line, Text as SvgText, G } from 'react-native-svg';
+import * as ImagePicker from 'expo-image-picker';
+import DataSettingsSheet from '@/components/DataSettingsSheet';
+import Svg, { Path, Defs, LinearGradient, Stop, Circle, Line, Text as SvgText, G, Rect } from 'react-native-svg';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withSpring,
+  withTiming,
+  withRepeat,
+  Easing,
+} from 'react-native-reanimated';
 import { getDatabase } from '@/core/database/sqlite';
 import { formatIDR } from '@/core/formatters/currency';
 
-const { width: screenWidth } = Dimensions.get('window');
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
+
+interface SpringButtonProps {
+  onPress?: () => void;
+  disabled?: boolean;
+  style?: any;
+  children: React.ReactNode;
+}
+
+const SpringButton: React.FC<SpringButtonProps> = ({ onPress, disabled, style, children }) => {
+  const scale = useSharedValue(1);
+
+  const animatedStyle = useAnimatedStyle(() => {
+    return {
+      transform: [{ scale: scale.value }],
+    };
+  });
+
+  const handlePressIn = () => {
+    if (disabled) return;
+    scale.value = withSpring(0.95, { damping: 15, stiffness: 300 });
+  };
+
+  const handlePressOut = () => {
+    if (disabled) return;
+    scale.value = withSpring(1.0, { damping: 15, stiffness: 300 });
+  };
+
+  return (
+    <AnimatedPressable
+      onPress={onPress}
+      disabled={disabled}
+      onPressIn={handlePressIn}
+      onPressOut={handlePressOut}
+      style={[style, animatedStyle]}
+    >
+      {children}
+    </AnimatedPressable>
+  );
+};
+
+const OcrShimmerOverlay = () => {
+  const translateX = useSharedValue(-300);
+
+  useEffect(() => {
+    translateX.value = withRepeat(
+      withTiming(500, {
+        duration: 1500,
+        easing: Easing.linear,
+      }),
+      -1,
+      false
+    );
+  }, []);
+
+  const animatedStyle = useAnimatedStyle(() => {
+    return {
+      transform: [{ translateX: translateX.value }],
+    };
+  });
+
+  return (
+    <View style={styles.shimmerOverlayContainer} pointerEvents="none">
+      <Animated.View style={[styles.shimmerGradientContainer, animatedStyle]}>
+        <Svg height="100%" width="100%" viewBox="0 0 100 100" preserveAspectRatio="none">
+          <Defs>
+            <LinearGradient id="shimmerGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+              <Stop offset="0%" stopColor="#FFFFFF" stopOpacity={0} />
+              <Stop offset="50%" stopColor="#FFFFFF" stopOpacity={0.6} />
+              <Stop offset="100%" stopColor="#FFFFFF" stopOpacity={0} />
+            </LinearGradient>
+          </Defs>
+          <Rect x="0" y="0" width="100" height="100" fill="url(#shimmerGrad)" />
+        </Svg>
+      </Animated.View>
+    </View>
+  );
+};
+
+const FadeInSlideContainer = ({ children }: { children: React.ReactNode }) => {
+  const opacity = useSharedValue(0);
+  const translateY = useSharedValue(20);
+
+  useEffect(() => {
+    opacity.value = withTiming(1, { duration: 250, easing: Easing.out(Easing.ease) });
+    translateY.value = withTiming(0, { duration: 250, easing: Easing.out(Easing.ease) });
+  }, []);
+
+  const animatedStyle = useAnimatedStyle(() => {
+    return {
+      opacity: opacity.value,
+      transform: [{ translateY: translateY.value }],
+    };
+  });
+
+  return (
+    <Animated.View style={[{ width: '100%', justifyContent: 'center', alignItems: 'center' }, animatedStyle]}>
+      {children}
+    </Animated.View>
+  );
+};
+
+const FadeInSlidePreview = ({ children }: { children: React.ReactNode }) => {
+  const opacity = useSharedValue(0);
+  const translateY = useSharedValue(20);
+
+  useEffect(() => {
+    opacity.value = withTiming(1, { duration: 250, easing: Easing.out(Easing.ease) });
+    translateY.value = withTiming(0, { duration: 250, easing: Easing.out(Easing.ease) });
+  }, []);
+
+  const animatedStyle = useAnimatedStyle(() => {
+    return {
+      opacity: opacity.value,
+      transform: [{ translateY: translateY.value }],
+    };
+  });
+
+  return (
+    <Animated.View style={[styles.previewContainer, animatedStyle]}>
+      {children}
+    </Animated.View>
+  );
+};
+
+const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
 const chartWidth = screenWidth - 40; // padding horizontal 20 + 20
 const chartHeight = 160;
 
@@ -66,6 +204,7 @@ const INCOME_CATEGORIES = [
 const CATEGORIES = EXPENSE_CATEGORIES;
 
 export default function SpendsScreen() {
+  const insets = useSafeAreaInsets();
   const [loading, setLoading] = useState(true);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
@@ -76,6 +215,7 @@ export default function SpendsScreen() {
   const [selectedMenuTransaction, setSelectedMenuTransaction] = useState<Transaction | null>(null);
   const [editingTransactionId, setEditingTransactionId] = useState<string | null>(null);
   const [isCategoryPickerOpen, setIsCategoryPickerOpen] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   
   // Filter States
   const [isFilterModalOpen, setIsFilterModalOpen] = useState(false);
@@ -88,6 +228,8 @@ export default function SpendsScreen() {
   const [tempCategory, setTempCategory] = useState<string>('all');
   const [tempSort, setTempSort] = useState<'newest' | 'oldest' | 'highest'>('newest');
 
+
+
   // Form Input States
   const [amountInput, setAmountInput] = useState('');
   const [transactionName, setTransactionName] = useState('');
@@ -98,6 +240,12 @@ export default function SpendsScreen() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [selectedAccountId, setSelectedAccountId] = useState('acc-cash');
   const [transactionType, setTransactionType] = useState<'expense' | 'income'>('expense');
+  const [rawOcrLines, setRawOcrLines] = useState<string[]>([]);
+  const [isOcrLoading, setIsOcrLoading] = useState(false);
+  const [scannerStep, setScannerStep] = useState<'idle' | 'preview'>('idle');
+  const [capturedImageUri, setCapturedImageUri] = useState<string | null>(null);
+  const [capturedImageBase64, setCapturedImageBase64] = useState<string | null>(null);
+  const [showBetaModal, setShowBetaModal] = useState(false);
 
   const categoriesList = useMemo(() => {
     return transactionType === 'expense' ? EXPENSE_CATEGORIES : INCOME_CATEGORIES;
@@ -167,6 +315,268 @@ export default function SpendsScreen() {
     const cleanValue = value.replace(/\D/g, '');
     if (!cleanValue) return '';
     return Number(cleanValue).toLocaleString('id-ID');
+  };
+
+  const handleReceiptCapture = async () => {
+    try {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission Denied', 'Camera permissions are required to scan receipt photos.');
+        return;
+      }
+
+      setCapturedImageUri(null);
+      setCapturedImageBase64(null);
+
+      const result = await ImagePicker.launchCameraAsync({
+        quality: 0.7,
+        allowsEditing: false,
+        base64: true,
+      });
+
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        const asset = result.assets[0];
+        setCapturedImageUri(asset.uri);
+        setCapturedImageBase64(asset.base64 || null);
+        setScannerStep('preview');
+      }
+    } catch (error) {
+      console.error('Failed to launch camera capture:', error);
+      Alert.alert('Error', 'Failed to launch camera capture workflow.');
+    }
+  };
+
+  const handleSelectFromGallery = async () => {
+    try {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission Denied', 'Gallery permissions are required to select receipt photos.');
+        return;
+      }
+
+      setCapturedImageUri(null);
+      setCapturedImageBase64(null);
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        quality: 0.7,
+        allowsEditing: false,
+        base64: true,
+      });
+
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        const asset = result.assets[0];
+        setCapturedImageUri(asset.uri);
+        setCapturedImageBase64(asset.base64 || null);
+        setScannerStep('preview');
+      }
+    } catch (error) {
+      console.error('Failed to launch gallery picker:', error);
+      Alert.alert('Error', 'Failed to launch gallery picker workflow.');
+    }
+  };
+
+  const handleOcrPicker = () => {
+    Alert.alert(
+      'Pilih Sumber Foto',
+      'Pilih metode input untuk memindai struk belanja Anda:',
+      [
+        { text: 'Camera', onPress: handleReceiptCapture },
+        { text: 'Gallery', onPress: handleSelectFromGallery },
+        { text: 'Cancel', style: 'cancel' }
+      ]
+    );
+  };
+
+  const handleOcrRetake = () => {
+    setCapturedImageUri(null);
+    setCapturedImageBase64(null);
+    setScannerStep('idle');
+    handleOcrPicker();
+  };
+
+  const handleOcrCrop = async () => {
+    if (!capturedImageUri) return;
+    try {
+      const info = await manipulateAsync(capturedImageUri, [], { compress: 1 });
+      const originY = Math.round(info.height * 0.05);
+      const newHeight = Math.round(info.height * 0.90);
+
+      const cropResult = await manipulateAsync(
+        capturedImageUri,
+        [
+          {
+            crop: {
+              originX: 0,
+              originY: originY,
+              width: info.width,
+              height: newHeight,
+            },
+          },
+        ],
+        { compress: 0.7, format: SaveFormat.JPEG, base64: true }
+      );
+
+      setCapturedImageUri(cropResult.uri);
+      setCapturedImageBase64(cropResult.base64 || null);
+    } catch (error) {
+      console.error('Failed to crop receipt image:', error);
+      Alert.alert('Error', 'Failed to crop the document image.');
+    }
+  };
+
+  const handleOcrSubmit = async () => {
+    if (!capturedImageBase64) {
+      Alert.alert('Error', 'No captured image data found.');
+      return;
+    }
+
+    setIsOcrLoading(true);
+    setScannerStep('idle');
+    
+    try {
+      const base64Image = `data:image/jpeg;base64,${capturedImageBase64}`;
+
+      const formData = new FormData();
+      formData.append('apikey', 'helloworld');
+      formData.append('language', 'eng');
+      formData.append('base64Image', base64Image);
+      formData.append('OCREngine', '2');
+      formData.append('scale', 'true');
+      formData.append('isTable', 'false');
+
+      const response = await fetch('https://api.ocr.space/parse/image', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        throw new Error(`Server returned status code ${response.status}`);
+      }
+
+      const jsonResponse = await response.json();
+      if (jsonResponse.IsErroredOnProcessing) {
+        throw new Error(jsonResponse.ErrorMessage || 'Processing error');
+      }
+
+      const parsedResults = jsonResponse.ParsedResults;
+      if (!parsedResults || parsedResults.length === 0 || typeof parsedResults[0].ParsedText !== 'string' || !parsedResults[0].ParsedText.trim()) {
+        setIsOcrLoading(false);
+        setCapturedImageUri(null);
+        setCapturedImageBase64(null);
+        Alert.alert('Scan Failed', 'Low image contrast detected. Please entry amount manually or retake under clearer lighting.');
+        return;
+      }
+
+      const rawText = parsedResults[0].ParsedText;
+      const fullTextStream = rawText.toLowerCase();
+      const cleanedText = rawText
+        .replace(/(\d+),\s*000?\b/g, '$1')
+        .replace(/(\d+)\.\s*00\b/g, '$1');
+      const lines = cleanedText.split(/\r?\n/).map((l: string) => l.trim()).filter((l: string) => l.length > 0);
+
+      setRawOcrLines(lines);
+
+      let extractedAmount = 0;
+      const globalStream = rawText.toLowerCase();
+
+      try {
+        const matches = [...globalStream.matchAll(/(?:total|qris|bca|cash|tunai)[:\s\-=]*([\s\S]{1,40})/gi)];
+
+        if (matches && matches.length > 0) {
+          let rawFragment = matches[matches.length - 1][1];
+          if (rawFragment) {
+            let extractedNumStr = '';
+            const numMatch = rawFragment.match(/(\d{1,3}(?:[.,]\d{3})+|\d+)/);
+            if (numMatch) {
+              extractedNumStr = numMatch[0];
+            }
+
+            let val = NaN;
+            if (extractedNumStr) {
+              let cleanFragment = extractedNumStr;
+              if (/[.,]00$/.test(cleanFragment)) {
+                cleanFragment = cleanFragment.replace(/[.,]00$/, '');
+              }
+              const absoluteDigits = cleanFragment.replace(/\D/g, '');
+              val = parseInt(absoluteDigits, 10);
+            }
+
+            if (isNaN(val) || val < 1000) {
+              let recovered = false;
+              if (matches.length > 1) {
+                for (let j = matches.length - 2; j >= 0; j--) {
+                  const prevFragment = matches[j][1];
+                  const prevNumMatch = prevFragment.match(/(\d{1,3}(?:[.,]\d{3})+|\d+)/);
+                  if (prevNumMatch) {
+                    let prevClean = prevNumMatch[0];
+                    if (/[.,]00$/.test(prevClean)) {
+                      prevClean = prevClean.replace(/[.,]00$/, '');
+                    }
+                    const prevDigits = prevClean.replace(/\D/g, '');
+                    const prevVal = parseInt(prevDigits, 10);
+                    if (!isNaN(prevVal) && prevVal >= 1000) {
+                      val = prevVal;
+                      recovered = true;
+                      break;
+                    }
+                  }
+                }
+              }
+              if (!recovered) {
+                const broadMatches = globalStream.match(/\b\d{4,7}\b/g);
+                if (broadMatches && broadMatches.length > 0) {
+                  const fallbackVal = parseInt(broadMatches[broadMatches.length - 1], 10);
+                  if (!isNaN(fallbackVal) && fallbackVal >= 1000) {
+                    val = fallbackVal;
+                  }
+                }
+              }
+            }
+
+            if (!isNaN(val) && val > 0) {
+              extractedAmount = val;
+            }
+          }
+        }
+
+        if (extractedAmount > 0) {
+          const startVal = parseInt(amountInput.replace(/\D/g, ''), 10) || 0;
+          const endVal = extractedAmount;
+          const duration = 1000;
+          const startTime = Date.now();
+          const easeOutCubic = (t: number): number => {
+            return 1 - Math.pow(1 - t, 3);
+          };
+          const animate = () => {
+            const now = Date.now();
+            const elapsed = now - startTime;
+            const progress = Math.min(elapsed / duration, 1);
+            const easedProgress = easeOutCubic(progress);
+            const currentAmount = Math.round(startVal + (endVal - startVal) * easedProgress);
+            setAmountInput(formatThousandsSeparator(String(currentAmount)));
+            if (progress < 1) {
+              requestAnimationFrame(animate);
+            }
+          };
+          requestAnimationFrame(animate);
+          const formattedAmount = formatThousandsSeparator(String(extractedAmount));
+          Alert.alert('OCR Success', `Receipt processed. Found total: IDR ${formattedAmount}`);
+        } else {
+          Alert.alert('Scan Failed', 'Raw text read: ' + fullTextStream.substring(0, 60));
+        }
+      } catch (parseError) {
+        console.error('OCR parsing runtime anomaly intercepted:', parseError);
+        Alert.alert('Scan Failed', 'Low image contrast detected. Please entry amount manually or retake under clearer lighting.');
+      }
+    } catch (error) {
+      console.error('Failed to parse receipt OCR:', error);
+      Alert.alert('Scan Failed', 'Low image contrast detected. Please entry amount manually or retake under clearer lighting.');
+    } finally {
+      setIsOcrLoading(false);
+      setCapturedImageUri(null);
+      setCapturedImageBase64(null);
+    }
   };
 
   const handleConfirmTransaction = async () => {
@@ -511,20 +921,16 @@ export default function SpendsScreen() {
       styles.container,
       { paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight || 0) + 16 : 16 }
     ]}>
+
       {/* SINKRONISASI HEADER ATAS */}
       <View style={styles.topHeader}>
-        <View style={styles.profileRow}>
-          <Image
-            source={{ uri: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=100&q=80' }}
-            style={styles.avatar}
-          />
-          <TouchableOpacity activeOpacity={0.7} style={styles.profileEditWrapper}>
-            <Text style={styles.editAccountText}>Edit your account</Text>
-            <Ionicons name="chevron-forward" size={12} color="#64748B" style={{ marginLeft: 2 }} />
-          </TouchableOpacity>
-        </View>
-        <TouchableOpacity style={styles.settingsButton} activeOpacity={0.7}>
-          <Ionicons name="settings-outline" size={24} color="#1E293B" />
+        <Text style={styles.headerTitle}>Spends</Text>
+        <TouchableOpacity 
+          style={styles.compactSettingsButton} 
+          activeOpacity={0.7}
+          onPress={() => setIsSettingsOpen(true)}
+        >
+          <Ionicons name="settings-outline" size={22} color="#1E293B" />
         </TouchableOpacity>
       </View>
 
@@ -703,10 +1109,66 @@ export default function SpendsScreen() {
       {/* NEW/EDIT TRANSACTION FORM MODAL */}
       <Modal visible={isModalOpen} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
-          <KeyboardAvoidingView
-            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-            style={styles.modalContent}
-          >
+          {isOcrLoading && (
+            <View style={styles.globalOcrLoadingOverlay} pointerEvents="auto">
+              <ActivityIndicator size="large" color="#3A86FF" />
+            </View>
+          )}
+          {scannerStep === 'preview' ? (
+            <FadeInSlidePreview>
+              <View style={styles.previewHeader}>
+                <TouchableOpacity
+                  style={styles.previewBackButton}
+                  onPress={() => setScannerStep('idle')}
+                >
+                  <Ionicons name="arrow-back" size={24} color="#1E293B" />
+                </TouchableOpacity>
+                <View style={styles.previewHeaderIcons}>
+                  <TouchableOpacity 
+                    style={[styles.previewHeaderIconButton, isOcrLoading && { opacity: 0.6 }]}
+                    onPress={handleOcrCrop}
+                    disabled={isOcrLoading}
+                  >
+                    <Ionicons name="crop-outline" size={22} color="#1E293B" />
+                  </TouchableOpacity>
+                  <TouchableOpacity 
+                    style={[styles.previewHeaderIconButton, isOcrLoading && { opacity: 0.6 }]}
+                    onPress={handleOcrRetake}
+                    disabled={isOcrLoading}
+                  >
+                    <Ionicons name="refresh-outline" size={22} color="#1E293B" />
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              <View style={styles.previewImageContainer}>
+                {capturedImageUri && (
+                  <View style={styles.previewCardFrame}>
+                    <Image
+                      source={{ uri: capturedImageUri }}
+                      style={styles.previewImage}
+                      resizeMode="contain"
+                    />
+                  </View>
+                )}
+              </View>
+
+              <View style={styles.previewFooter}>
+                <TouchableOpacity
+                  style={[styles.previewSubmitButton, isOcrLoading && { opacity: 0.6 }]}
+                  onPress={handleOcrSubmit}
+                  activeOpacity={0.8}
+                  disabled={isOcrLoading}
+                >
+                  <Text style={styles.previewSubmitButtonText}>Submit</Text>
+                </TouchableOpacity>
+              </View>
+            </FadeInSlidePreview>
+          ) : (
+            <KeyboardAvoidingView
+              behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+              style={styles.modalContent}
+            >
             <View style={styles.modalHeader}>
               <View style={styles.modalHeaderTitleRow}>
                 <TouchableOpacity 
@@ -724,7 +1186,43 @@ export default function SpendsScreen() {
               </View>
             </View>
 
-            <View style={styles.modalForm}>
+            <ScrollView 
+              showsVerticalScrollIndicator={false} 
+              contentContainerStyle={{ paddingBottom: 80 }}
+              style={{ width: '100%' }}
+            >
+              <View style={styles.modalForm}>
+              {/* FAST-TRACK RECEIPT OCR BANNER CARD */}
+              {!editingTransactionId && (
+                <View style={styles.ocrBannerCard}>
+                  <View style={styles.ocrBannerTextRow}>
+                    <Text style={styles.ocrBannerText}>
+                      {isOcrLoading ? 'Processing receipt...' : 'Have receipt photo? Say less'}
+                    </Text>
+                    {!isOcrLoading && (
+                      <Text style={styles.ocrBannerBetaText}>Beta</Text>
+                    )}
+                    <SpringButton 
+                      style={styles.ocrBannerInfoButton}
+                      onPress={() => setShowBetaModal(true)}
+                    >
+                      <Ionicons name="alert-circle-outline" size={16} color="#3A86FF" />
+                    </SpringButton>
+                  </View>
+                  <SpringButton
+                    style={[styles.ocrBannerButton, isOcrLoading && { opacity: 0.6 }]}
+                    onPress={handleOcrPicker}
+                    disabled={isOcrLoading}
+                  >
+                    {isOcrLoading ? (
+                      <ActivityIndicator size="small" color="#FFFFFF" />
+                    ) : (
+                      <Text style={styles.ocrBannerButtonText}>Try Now</Text>
+                    )}
+                  </SpringButton>
+                </View>
+              )}
+
               {/* TRANSACTION TYPE SELECTOR */}
               <View style={styles.typeSelectorWrapper}>
                 <TouchableOpacity
@@ -820,7 +1318,7 @@ export default function SpendsScreen() {
               )}
 
               {/* INPUT FIELDS STACK */}
-              <View style={styles.fieldsStack}>
+              <View style={[styles.fieldsStack, { position: 'relative' }]}>
                 <View style={styles.capsuleInputWrapper}>
                   <TextInput
                     style={styles.capsuleInput}
@@ -880,18 +1378,60 @@ export default function SpendsScreen() {
                     onChangeText={setExtraDescription}
                   />
                 </View>
+                {isOcrLoading && <OcrShimmerOverlay />}
               </View>
 
               {/* CONFIRM BUTTON */}
-              <TouchableOpacity 
-                style={styles.submitButton} 
-                activeOpacity={0.8}
+              <SpringButton 
+                style={[styles.submitButton, isOcrLoading && { opacity: 0.6 }]} 
                 onPress={handleConfirmTransaction}
+                disabled={isOcrLoading}
               >
                 <Text style={styles.submitButtonText}>Confirm</Text>
+              </SpringButton>
+            </View>
+          </ScrollView>
+          </KeyboardAvoidingView>
+        )}
+      </View>
+    </Modal>
+
+      {/* BETA INFORMATION MODAL */}
+      <Modal visible={showBetaModal} animationType="fade" transparent>
+        <View style={styles.betaModalOverlay}>
+          <FadeInSlideContainer>
+            <View style={styles.betaModalContent}>
+              <View style={styles.betaModalHeader}>
+                <Ionicons name="alert-circle-outline" size={24} color="#3A86FF" />
+                <Text style={styles.betaModalTitle}>Receipt Scanner (Beta)</Text>
+              </View>
+              <Text style={styles.betaModalDescription}>
+                This feature leverages automated OCR to parse transaction totals.
+              </Text>
+              
+              <View style={styles.betaModalSection}>
+                <Text style={styles.betaModalSectionTitle}>Supported:</Text>
+                <Text style={styles.betaModalSectionText}>
+                  • Clear, high-contrast text on flat, well-lit receipt documents.
+                </Text>
+              </View>
+
+              <View style={styles.betaModalSection}>
+                <Text style={styles.betaModalSectionTitle}>Not Yet Supported:</Text>
+                <Text style={styles.betaModalSectionText}>
+                  • Deeply creased paper, faded thermal inks, or blurry/dark captures (manual entry recommended).
+                </Text>
+              </View>
+
+              <TouchableOpacity
+                style={styles.betaModalCloseButton}
+                onPress={() => setShowBetaModal(false)}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.betaModalCloseButtonText}>Close</Text>
               </TouchableOpacity>
             </View>
-          </KeyboardAvoidingView>
+          </FadeInSlideContainer>
         </View>
       </Modal>
 
@@ -1080,6 +1620,16 @@ export default function SpendsScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* SETTINGS MODAL */}
+      <DataSettingsSheet
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+        onDataChange={() => {
+          loadLocalTransactions();
+          loadAccounts();
+        }}
+      />
     </View>
   );
 }
@@ -1102,28 +1652,18 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     marginBottom: 16,
   },
-  profileRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  avatar: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    marginRight: 8,
-  },
-  profileEditWrapper: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  editAccountText: {
+  headerTitle: {
     fontFamily: 'System',
-    fontSize: 14,
-    fontWeight: '400',
-    color: '#64748B',
+    fontSize: 24,
+    fontWeight: '800',
+    color: '#1E293B',
   },
-  settingsButton: {
-    padding: 4,
+  compactSettingsButton: {
+    padding: 6,
+    borderRadius: 12,
+    backgroundColor: '#EEF1F6',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   wealthContainer: {
     alignItems: 'center',
@@ -1744,5 +2284,329 @@ const styles = StyleSheet.create({
   },
   typeSelectorTextInactive: {
     color: '#64748B',
+  },
+
+  closeModalButton: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#EEF1F6',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  ocrBannerCard: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 16,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    marginBottom: 16,
+  },
+  ocrBannerText: {
+    fontFamily: 'System',
+    fontSize: 13,
+    color: '#64748B',
+    fontWeight: '500',
+  },
+  ocrBannerButton: {
+    backgroundColor: '#3A86FF',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+  },
+  ocrBannerButtonText: {
+    fontFamily: 'System',
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  fullScreenCameraContainer: {
+    flex: 1,
+    backgroundColor: '#000000',
+  },
+  cameraOverlayContainer: {
+    flex: 1,
+    justifyContent: 'space-between',
+    backgroundColor: 'transparent',
+  },
+  cameraTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'flex-start',
+    alignItems: 'center',
+    paddingHorizontal: 24,
+    paddingTop: Platform.OS === 'ios' ? 50 : 24,
+    zIndex: 10,
+  },
+  cameraCloseButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(0, 0, 0, 0.4)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  viewfinderContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  viewfinderGuide: {
+    width: 270,
+    height: 380,
+    borderWidth: 2,
+    borderColor: '#2ECC71',
+    borderRadius: 16,
+    backgroundColor: 'rgba(46, 204, 113, 0.15)',
+  },
+  cameraBottomContainer: {
+    width: '100%',
+    alignItems: 'center',
+    paddingBottom: 36,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+  },
+  cameraModesScroll: {
+    height: 34,
+    marginBottom: 16,
+    flexGrow: 0,
+    width: '100%',
+  },
+  cameraModesContent: {
+    paddingHorizontal: 20,
+    alignItems: 'center',
+    gap: 24,
+  },
+  cameraModeText: {
+    fontFamily: 'System',
+    fontSize: 13,
+    fontWeight: '700',
+    color: 'rgba(255, 255, 255, 0.4)',
+    letterSpacing: 1.2,
+  },
+  cameraModeTextActive: {
+    color: '#FFFFFF',
+  },
+  shutterOuter: {
+    width: 76,
+    height: 76,
+    borderRadius: 38,
+    borderWidth: 4,
+    borderColor: '#FFFFFF',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  shutterInner: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: '#FFFFFF',
+  },
+  previewContainer: {
+    flex: 1,
+    backgroundColor: '#F8F9FA',
+  },
+  previewHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingTop: Platform.OS === 'ios' ? 50 : 20,
+    height: 90,
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#EEF1F6',
+  },
+  previewBackButton: {
+    padding: 8,
+  },
+  previewHeaderIcons: {
+    flexDirection: 'row',
+    gap: 16,
+  },
+  previewHeaderIconButton: {
+    padding: 8,
+  },
+  previewImageContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  previewCardFrame: {
+    width: '100%',
+    height: '100%',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    padding: 12,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.08,
+    shadowRadius: 24,
+    elevation: 6,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  previewImage: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 12,
+  },
+  previewFooter: {
+    paddingHorizontal: 20,
+    paddingBottom: Platform.OS === 'ios' ? 34 : 20,
+    paddingTop: 16,
+    backgroundColor: '#FFFFFF',
+    borderTopWidth: 1,
+    borderTopColor: '#EEF1F6',
+  },
+  previewSubmitButton: {
+    height: 50,
+    borderRadius: 14,
+    backgroundColor: '#1A73E8',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  previewSubmitButtonText: {
+    fontFamily: 'System',
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  processingContainer: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 16,
+  },
+  processingText: {
+    fontFamily: 'System',
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#64748B',
+  },
+  cameraViewComponent: {
+    width: '100%',
+    height: '100%',
+    position: 'absolute',
+  },
+  ocrBannerTextRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+    marginRight: 12,
+    gap: 4,
+  },
+  ocrBannerBetaText: {
+    fontFamily: 'System',
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#94A3B8',
+    backgroundColor: '#F1F5F9',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  betaModalOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.4)',
+    zIndex: 10000,
+  },
+  ocrBannerInfoButton: {
+    marginLeft: 6,
+    padding: 2,
+  },
+  betaModalContent: {
+    width: '85%',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    padding: 24,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    elevation: 5,
+  },
+  betaModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+    gap: 8,
+  },
+  betaModalTitle: {
+    fontFamily: 'System',
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#1E293B',
+  },
+  betaModalDescription: {
+    fontFamily: 'System',
+    fontSize: 14,
+    color: '#64748B',
+    marginBottom: 20,
+    lineHeight: 20,
+  },
+  betaModalSection: {
+    marginBottom: 16,
+  },
+  betaModalSectionTitle: {
+    fontFamily: 'System',
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#334155',
+    marginBottom: 6,
+  },
+  betaModalSectionText: {
+    fontFamily: 'System',
+    fontSize: 13,
+    color: '#64748B',
+    lineHeight: 18,
+  },
+  betaModalCloseButton: {
+    backgroundColor: '#3A86FF',
+    height: 44,
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  betaModalCloseButtonText: {
+    fontFamily: 'System',
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  globalOcrLoadingOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(255, 255, 255, 0.3)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 9999,
+  },
+  shimmerOverlayContainer: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(255, 255, 255, 0.4)',
+    borderRadius: 16,
+    overflow: 'hidden',
+    zIndex: 99,
+  },
+  shimmerGradientContainer: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    width: 300,
   },
 });

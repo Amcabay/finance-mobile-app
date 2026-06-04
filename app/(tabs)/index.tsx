@@ -22,6 +22,7 @@ import {
   KeyboardAvoidingView,
 } from 'react-native';
 import Svg, { Circle, G } from 'react-native-svg';
+import DataSettingsSheet from '@/components/DataSettingsSheet';
 
 const { width: screenWidth } = Dimensions.get('window');
 
@@ -57,10 +58,15 @@ export default function DashboardScreen() {
   const [spentToday, setSpentToday] = useState(0);
   const [dailyLimit, setDailyLimit] = useState(200000); // limit default: 200.000
   const [categoryExpenses, setCategoryExpenses] = useState<CategoryExpense[]>([]);
+  const [totalTxsCount, setTotalTxsCount] = useState(0);
+  const [dailyVelocity, setDailyVelocity] = useState(0);
+  const [projectedMonthlyExpense, setProjectedMonthlyExpense] = useState(0);
+  const [runwayStatus, setRunwayStatus] = useState<'Safe' | 'Runout Risk'>('Safe');
 
   // Edit Limit Modal States
   const [isLimitModalOpen, setIsLimitModalOpen] = useState(false);
   const [newLimitInput, setNewLimitInput] = useState('');
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
   // Calculate current month string using device local timezone offset
   const currentMonthStr = useMemo(() => {
@@ -81,6 +87,7 @@ export default function DashboardScreen() {
         "SELECT COUNT(*) as count FROM transactions"
       );
       const txCount = txCountRows[0]?.count || 0;
+      setTotalTxsCount(txCount);
       if (txCount === 0) {
         await db.runAsync("UPDATE accounts SET balance = 0");
       }
@@ -150,6 +157,54 @@ export default function DashboardScreen() {
         setCategoryExpenses(mappedExpenses);
       } else {
         setCategoryExpenses([]);
+      }
+
+      // 4. PREDICTIVE FINANCIAL INSIGHTS LOGIC
+      if (txCount > 0) {
+        const expenseQueryRows = await db.getAllAsync<any>(
+          "SELECT SUM(amount) as total_expense, MIN(date) as earliest_date FROM transactions WHERE type = 'expense'"
+        );
+        const totalExpense = expenseQueryRows[0]?.total_expense || 0;
+        const earliestDateStr = expenseQueryRows[0]?.earliest_date;
+
+        let activeDays = 0;
+        if (earliestDateStr) {
+          const earliestDate = new Date(earliestDateStr);
+          const currentDate = new Date();
+          earliestDate.setHours(0, 0, 0, 0);
+          currentDate.setHours(0, 0, 0, 0);
+          const diffTime = Math.abs(currentDate.getTime() - earliestDate.getTime());
+          activeDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
+        }
+
+        let calculatedVelocity = 0;
+        if (activeDays >= 1) {
+          calculatedVelocity = totalExpense / activeDays;
+        } else {
+          calculatedVelocity = totalExpense / 7;
+        }
+        setDailyVelocity(calculatedVelocity);
+
+        const now = new Date();
+        const year = now.getFullYear();
+        const month = now.getMonth();
+        const totalDaysInMonth = new Date(year, month + 1, 0).getDate();
+        const projectedEOM = calculatedVelocity * totalDaysInMonth;
+        setProjectedMonthlyExpense(projectedEOM);
+
+        const currentDay = now.getDate();
+        const remainingDays = Math.max(0, totalDaysInMonth - currentDay);
+        const projectedRemainingExpense = calculatedVelocity * remainingDays;
+
+        if (sumWealth >= projectedRemainingExpense) {
+          setRunwayStatus('Safe');
+        } else {
+          setRunwayStatus('Runout Risk');
+        }
+      } else {
+        setDailyVelocity(0);
+        setProjectedMonthlyExpense(0);
+        setRunwayStatus('Safe');
       }
 
     } catch (error) {
@@ -248,6 +303,8 @@ export default function DashboardScreen() {
     });
   }, [categoryExpenses]);
 
+
+
   if (loading) {
     return (
       <View style={styles.centerContainer}>
@@ -271,17 +328,13 @@ export default function DashboardScreen() {
       >
         {/* HEADER SECTION */}
         <View style={styles.header}>
-          <View style={styles.profileRow}>
-            <Image
-              source={{ uri: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=100&q=80' }}
-              style={styles.avatar}
-            />
-            <TouchableOpacity activeOpacity={0.7}>
-              <Text style={styles.editAccountText}>Edit your account</Text>
-            </TouchableOpacity>
-          </View>
-          <TouchableOpacity style={styles.settingsButton} activeOpacity={0.7}>
-            <Ionicons name="settings-outline" size={24} color="#1E293B" />
+          <Text style={styles.headerTitle}>Overview</Text>
+          <TouchableOpacity 
+            style={styles.compactSettingsButton} 
+            activeOpacity={0.7}
+            onPress={() => setIsSettingsOpen(true)}
+          >
+            <Ionicons name="settings-outline" size={22} color="#1E293B" />
           </TouchableOpacity>
         </View>
 
@@ -384,6 +437,51 @@ export default function DashboardScreen() {
           </View>
         </View>
 
+        {/* PREDICTIVE FINANCIAL INSIGHTS CARD */}
+        <View style={styles.insightsCard}>
+          <Text style={styles.insightsTitle}>Financial Insights</Text>
+          {totalTxsCount === 0 ? (
+            <Text style={styles.insightsPlaceholder}>
+              Insufficient transaction data to generate predictive insights.
+            </Text>
+          ) : (
+            <View style={styles.insightsContent}>
+              <View style={styles.insightMetricRow}>
+                <Ionicons name="speedometer-outline" size={16} color="#64748B" />
+                <Text style={styles.insightMetricText}>
+                  Daily Velocity: IDR {Math.round(dailyVelocity).toLocaleString('id-ID')} / day
+                </Text>
+              </View>
+
+              <View style={styles.insightMetricRow}>
+                <Ionicons name="calendar-outline" size={16} color="#64748B" />
+                <Text style={styles.insightMetricText}>
+                  Projected Monthly Expense: IDR {Math.round(projectedMonthlyExpense).toLocaleString('id-ID')}
+                </Text>
+              </View>
+
+              <View style={styles.insightStatusRow}>
+                <Text style={styles.insightStatusLabel}>Runway Status:</Text>
+                <View 
+                  style={[
+                    styles.statusBadgeCapsule, 
+                    runwayStatus === 'Safe' ? styles.statusBadgeSafe : styles.statusBadgeWarning
+                  ]}
+                >
+                  <Text 
+                    style={[
+                      styles.statusBadgeText, 
+                      runwayStatus === 'Safe' ? styles.statusTextSafe : styles.statusTextWarning
+                    ]}
+                  >
+                    {runwayStatus}
+                  </Text>
+                </View>
+              </View>
+            </View>
+          )}
+        </View>
+
         {/* DAILY LIMITS CARD (Dinamis Berdasarkan Pengeluaran Hari Ini) */}
         <View style={styles.limitsCard}>
           <View style={styles.limitsHeader}>
@@ -472,6 +570,13 @@ export default function DashboardScreen() {
           </KeyboardAvoidingView>
         </View>
       </Modal>
+
+      {/* SETTINGS MODAL */}
+      <DataSettingsSheet
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+        onDataChange={loadOfflineData}
+      />
     </View>
   );
 }
@@ -501,25 +606,20 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 24,
   },
-  profileRow: {
-    flexDirection: 'row',
+  headerTitle: {
+    fontFamily: 'System',
+    fontSize: 24,
+    fontWeight: '800',
+    color: '#1E293B',
+  },
+  compactSettingsButton: {
+    padding: 6,
+    borderRadius: 12,
+    backgroundColor: '#EEF1F6',
+    justifyContent: 'center',
     alignItems: 'center',
   },
-  avatar: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    marginRight: 8,
-  },
-  editAccountText: {
-    fontFamily: 'System',
-    fontSize: 14,
-    fontWeight: '400',
-    color: '#64748B',
-  },
-  settingsButton: {
-    padding: 4,
-  },
+
   wealthCard: {
     borderRadius: 24,
     backgroundColor: '#EEF4FF',
@@ -841,5 +941,79 @@ const styles = StyleSheet.create({
     fontFamily: 'System',
     fontSize: 12,
     color: '#94A3B8',
+  },
+  insightsCard: {
+    borderRadius: 24,
+    backgroundColor: '#F8FAFC',
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    marginBottom: 20,
+  },
+  insightsTitle: {
+    fontFamily: 'System',
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#1E293B',
+    marginBottom: 12,
+  },
+  insightsPlaceholder: {
+    fontFamily: 'System',
+    fontSize: 13,
+    color: '#94A3B8',
+    fontWeight: '500',
+    textAlign: 'center',
+    paddingVertical: 12,
+  },
+  insightsContent: {
+    gap: 10,
+  },
+  insightMetricRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  insightMetricText: {
+    fontFamily: 'System',
+    fontSize: 13,
+    color: '#334155',
+    fontWeight: '500',
+  },
+  insightStatusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 4,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#F1F5F9',
+  },
+  insightStatusLabel: {
+    fontFamily: 'System',
+    fontSize: 13,
+    color: '#475569',
+    fontWeight: '600',
+  },
+  statusBadgeCapsule: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 99,
+  },
+  statusBadgeSafe: {
+    backgroundColor: '#D1FAE5',
+  },
+  statusBadgeWarning: {
+    backgroundColor: '#FEE2E2',
+  },
+  statusBadgeText: {
+    fontFamily: 'System',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  statusTextSafe: {
+    color: '#065F46',
+  },
+  statusTextWarning: {
+    color: '#991B1B',
   },
 });

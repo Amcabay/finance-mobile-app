@@ -11,9 +11,17 @@ import {
   Platform,
   StatusBar,
   KeyboardAvoidingView,
+  Image,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { getDatabase } from '@/core/database/sqlite';
+import DataSettingsSheet from '@/components/DataSettingsSheet';
+import { scheduleCalendarEventReminder } from '@/core/services/notificationService';
+
+const MONTH_NAMES = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December'
+];
 
 interface Note {
   id: string;
@@ -42,6 +50,8 @@ export default function SchedulesScreen() {
   });
 
   const [notes, setNotes] = useState<Note[]>([]);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [totalTxsCount, setTotalTxsCount] = useState(0);
   const [isAdding, setIsAdding] = useState(false);
   const [selectedDay, setSelectedDay] = useState<number>(() => new Date().getDate());
 
@@ -49,18 +59,36 @@ export default function SchedulesScreen() {
   const [newNote, setNewNote] = useState('');
   const [noteCategory, setNoteCategory] = useState<'urgent' | 'reminder' | 'daily'>('daily');
   const [dueDate, setDueDate] = useState(''); // Format: YYYY-MM-DD
-  const [reminderBefore, setReminderBefore] = useState('');
+  const [reminderValue, setReminderValue] = useState('15');
+  const [reminderUnit, setReminderUnit] = useState<'minutes' | 'hours' | 'days'>('minutes');
 
   // Date Picker States
   const [isDatePickerOpen, setIsDatePickerOpen] = useState(false);
   const [pickerMonth, setPickerMonth] = useState<Date>(() => new Date());
+
+  const [isYearPickerOpen, setIsYearPickerOpen] = useState(false);
+
+  const years = useMemo(() => {
+    const currentYear = new Date().getFullYear();
+    const list = [];
+    for (let y = currentYear - 5; y <= currentYear + 5; y++) {
+      list.push(y);
+    }
+    return list;
+  }, []);
+
+  const handleSelectYear = (year: number) => {
+    setCurrentMonth(prev => new Date(year, prev.getMonth(), 1));
+    setIsYearPickerOpen(false);
+  };
 
   // Reset form inputs
   const resetNoteForm = () => {
     setNewNote('');
     setNoteCategory('daily');
     setDueDate('');
-    setReminderBefore('');
+    setReminderValue('15');
+    setReminderUnit('minutes');
   };
 
   // Navigasi Bulan dinamis
@@ -109,21 +137,13 @@ export default function SchedulesScreen() {
   }, [pickerDaysInMonth, pickerStartDayOffset]);
 
   const pickerMonthStr = useMemo(() => {
-    const monthNames = [
-      'January', 'February', 'March', 'April', 'May', 'June',
-      'July', 'August', 'September', 'October', 'November', 'December'
-    ];
-    return `${monthNames[pickerMonth.getMonth()]} ${pickerMonth.getFullYear()}`;
+    return `${MONTH_NAMES[pickerMonth.getMonth()]} ${pickerMonth.getFullYear()}`;
   }, [pickerMonth]);
 
   const formattedDueDateDisplay = useMemo(() => {
     if (!dueDate) return 'Select due date';
     const dateObj = new Date(dueDate);
-    const monthNames = [
-      'January', 'February', 'March', 'April', 'May', 'June',
-      'July', 'August', 'September', 'October', 'November', 'December'
-    ];
-    return `${dateObj.getDate()} ${monthNames[dateObj.getMonth()]} ${dateObj.getFullYear()}`;
+    return `${dateObj.getDate()} ${MONTH_NAMES[dateObj.getMonth()]} ${dateObj.getFullYear()}`;
   }, [dueDate]);
 
   // Hitung jumlah hari dalam bulan aktif
@@ -138,11 +158,7 @@ export default function SchedulesScreen() {
 
   // Nama header bulan dinamis
   const formattedMonthStr = useMemo(() => {
-    const monthNames = [
-      'January', 'February', 'March', 'April', 'May', 'June',
-      'July', 'August', 'September', 'October', 'November', 'December'
-    ];
-    return `${monthNames[currentMonth.getMonth()]} ${currentMonth.getFullYear()}`;
+    return `${MONTH_NAMES[currentMonth.getMonth()]} ${currentMonth.getFullYear()}`;
   }, [currentMonth]);
 
   // Pola pencarian YYYY-MM untuk SQLite
@@ -159,8 +175,15 @@ export default function SchedulesScreen() {
       const db = await getDatabase();
       const yearMonthPattern = `${formattedYearMonth}-%`;
 
+      // Query total transaction count for Settings stats
+      const txCountRows = await db.getAllAsync<any>(
+        "SELECT COUNT(*) as count FROM transactions"
+      );
+      const txCount = txCountRows[0]?.count || 0;
+      setTotalTxsCount(txCount);
+
       const rows = await db.getAllAsync<any>(
-        "SELECT * FROM notes WHERE user_id = ? AND date LIKE ? ORDER BY date ASC, id ASC",
+        "SELECT * FROM schedules WHERE user_id = ? AND date LIKE ? ORDER BY date ASC, id ASC",
         ['offline-user', yearMonthPattern]
       );
 
@@ -179,12 +202,12 @@ export default function SchedulesScreen() {
     }
   }, [formattedYearMonth]);
 
-  // Inisialisasi tabel notes di SQLite secara lazily dan seed data default sekali saja
+  // Inisialisasi tabel schedules di SQLite secara lazily
   const initNotesTable = useCallback(async () => {
     try {
       const db = await getDatabase();
       await db.execAsync(`
-        CREATE TABLE IF NOT EXISTS notes (
+        CREATE TABLE IF NOT EXISTS schedules (
           id TEXT PRIMARY KEY NOT NULL,
           user_id TEXT NOT NULL,
           note TEXT NOT NULL,
@@ -194,26 +217,9 @@ export default function SchedulesScreen() {
           reminder_before TEXT
         );
       `);
-
-      // Seed default notes inside initNotesTable (called once on startup)
-      const countResult = await db.getAllAsync<{ count: number }>("SELECT COUNT(*) as count FROM notes");
-      if (countResult && countResult[0] && countResult[0].count === 0) {
-        const defaultNotes = [
-          { id: '1', user_id: 'offline-user', note: "Internet Subscription Payment due", category: 'reminder', date: '2026-06-10', due_date: '2026-06-10', reminder_before: '2 days' },
-          { id: '2', user_id: 'offline-user', note: "Buy something for mom's birthday", category: 'daily', date: '2026-06-15', due_date: '', reminder_before: '' },
-        ];
-        for (const n of defaultNotes) {
-          await db.runAsync(
-            "INSERT INTO notes (id, user_id, note, category, date, due_date, reminder_before) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            [n.id, n.user_id, n.note, n.category, n.date, n.due_date, n.reminder_before]
-          );
-        }
-        console.log('✅ Seeded default notes successfully inside initNotesTable');
-      }
-
       setDbReady(true);
     } catch (error) {
-      console.error('Failed to initialize notes table:', error);
+      console.error('Failed to initialize schedules table:', error);
     }
   }, []);
 
@@ -227,6 +233,8 @@ export default function SchedulesScreen() {
       loadOfflineData();
     }
   }, [loadOfflineData, dbReady]);
+
+
 
   // Menambahkan note ke SQLite secara offline
   const handleAddEvent = async () => {
@@ -247,8 +255,28 @@ export default function SchedulesScreen() {
       const dayStr = String(selectedDay).padStart(2, '0');
       const noteDateStr = `${formattedYearMonth}-${dayStr}`;
 
+      let reminderSeconds = 0;
+      let reminderText = '15 minutes';
+      let triggerTimestamp = '';
+
+      if (noteCategory === 'reminder') {
+        const val = parseInt(reminderValue, 10) || 0;
+        let factor = 60; // minutes
+        if (reminderUnit === 'hours') factor = 3600;
+        else if (reminderUnit === 'days') factor = 86400;
+        reminderSeconds = val * factor;
+        reminderText = `${val} ${reminderUnit}`;
+
+        if (dueDate) {
+          const [yr, mo, dy] = dueDate.split('-').map(Number);
+          const eventTime = new Date(yr, mo - 1, dy, 9, 0, 0, 0);
+          const triggerMs = eventTime.getTime() - (reminderSeconds * 1000);
+          triggerTimestamp = String(triggerMs);
+        }
+      }
+
       await db.runAsync(
-        `INSERT INTO notes (id, user_id, note, category, date, due_date, reminder_before) 
+        `INSERT INTO schedules (id, user_id, note, category, date, due_date, reminder_before) 
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
         [
           newId,
@@ -257,9 +285,22 @@ export default function SchedulesScreen() {
           noteCategory,
           noteDateStr,
           noteCategory === 'reminder' ? dueDate : '',
-          noteCategory === 'reminder' ? reminderBefore.trim() : ''
+          noteCategory === 'reminder' ? reminderText : ''
         ]
       );
+
+      if (noteCategory === 'reminder') {
+        await scheduleCalendarEventReminder({
+          id: newId,
+          note: newNote.trim(),
+          category: noteCategory,
+          date: noteDateStr,
+          due_date: noteCategory === 'reminder' ? dueDate : '',
+          reminder_before: noteCategory === 'reminder' ? reminderText : '',
+          trigger_timestamp: triggerTimestamp,
+          reminder_text: reminderText,
+        });
+      }
 
       await loadOfflineData();
       setIsAdding(false);
@@ -283,7 +324,7 @@ export default function SchedulesScreen() {
           onPress: async () => {
             try {
               const db = await getDatabase();
-              await db.runAsync("DELETE FROM notes WHERE id = ?", [id]);
+              await db.runAsync("DELETE FROM schedules WHERE id = ?", [id]);
               await loadOfflineData();
             } catch (error) {
               console.error('Failed to delete note:', error);
@@ -344,12 +385,36 @@ export default function SchedulesScreen() {
         ]}
         showsVerticalScrollIndicator={false}
       >
+        {/* SINKRONISASI HEADER ATAS */}
+        <View style={styles.topHeader}>
+          <Text style={styles.headerTitle}>Schedules</Text>
+          <TouchableOpacity 
+            style={styles.compactSettingsButton} 
+            activeOpacity={0.7}
+            onPress={() => setIsSettingsOpen(true)}
+          >
+            <Ionicons name="settings-outline" size={22} color="#1E293B" />
+          </TouchableOpacity>
+        </View>
+
         {/* HEADER BULAN DINAMIS DENGAN NAVIGASI */}
         <View style={styles.monthHeader}>
           <TouchableOpacity activeOpacity={0.7} onPress={handlePrevMonth} style={styles.arrowButton}>
             <Ionicons name="chevron-back" size={22} color="#333D53" />
           </TouchableOpacity>
-          <Text style={styles.monthTitle}>{formattedMonthStr}</Text>
+          <View style={styles.monthYearTitleContainer}>
+            <Text style={styles.monthTitleText}>
+              {MONTH_NAMES[currentMonth.getMonth()]}
+            </Text>
+            <TouchableOpacity 
+              activeOpacity={0.7} 
+              onPress={() => setIsYearPickerOpen(true)}
+              style={styles.yearPickerTrigger}
+            >
+              <Text style={styles.yearTitleText}>{currentMonth.getFullYear()}</Text>
+              <Ionicons name="chevron-down" size={12} color="#333D53" style={{ marginLeft: 2 }} />
+            </TouchableOpacity>
+          </View>
           <TouchableOpacity activeOpacity={0.7} onPress={handleNextMonth} style={styles.arrowButton}>
             <Ionicons name="chevron-forward" size={22} color="#333D53" />
           </TouchableOpacity>
@@ -462,24 +527,29 @@ export default function SchedulesScreen() {
       <Modal visible={isAdding} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
           <KeyboardAvoidingView
-            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
             style={styles.modalContent}
           >
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Add Schedule for Day {selectedDay}</Text>
               <TouchableOpacity 
                 onPress={() => {
                   setIsAdding(false);
                   resetNoteForm();
                 }}
-                style={styles.closeModalButton}
+                style={styles.backCloseButton}
                 activeOpacity={0.7}
               >
-                <Ionicons name="close" size={20} color="#333D53" />
+                <Ionicons name="chevron-back" size={24} color="#333D53" />
               </TouchableOpacity>
+              <Text style={styles.modalTitle}>Add Schedule for Day {selectedDay}</Text>
             </View>
 
-            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.modalFormScroll}>
+            <ScrollView 
+              showsVerticalScrollIndicator={false} 
+              scrollEnabled={false} 
+              style={{ overflow: 'hidden' }} 
+              contentContainerStyle={styles.modalFormScroll}
+            >
               <View style={styles.modalForm}>
                 <Text style={styles.modalSubTitle}>Note Details</Text>
                 <View style={styles.capsuleInputWrapper}>
@@ -538,14 +608,43 @@ export default function SchedulesScreen() {
                     </TouchableOpacity>
 
                     <Text style={styles.modalSubTitle}>Reminder Alert</Text>
-                    <View style={styles.capsuleInputWrapper}>
-                      <TextInput
-                        style={styles.capsuleInput}
-                        placeholder="e.g. 1 day, 2 hours"
-                        placeholderTextColor="#94A3B8"
-                        value={reminderBefore}
-                        onChangeText={setReminderBefore}
-                      />
+                    <View style={styles.reminderInputRow}>
+                      <View style={[styles.capsuleInputWrapper, { flex: 1, marginTop: 0 }]}>
+                        <TextInput
+                          style={styles.capsuleInput}
+                          placeholder="15"
+                          placeholderTextColor="#94A3B8"
+                          keyboardType="numeric"
+                          maxLength={2}
+                          value={reminderValue}
+                          onChangeText={setReminderValue}
+                        />
+                      </View>
+                      
+                      <View style={styles.unitChipsRow}>
+                        {(['minutes', 'hours', 'days'] as const).map(unit => {
+                          const isSelected = reminderUnit === unit;
+                          const label = unit.charAt(0).toUpperCase() + unit.slice(1);
+                          return (
+                            <TouchableOpacity
+                              key={unit}
+                              style={[
+                                styles.unitChip,
+                                isSelected ? styles.unitChipActive : styles.unitChipInactive
+                              ]}
+                              onPress={() => setReminderUnit(unit)}
+                              activeOpacity={0.7}
+                            >
+                              <Text style={[
+                                styles.unitChipText,
+                                isSelected ? styles.unitChipTextActive : styles.unitChipTextInactive
+                              ]}>
+                                {label}
+                              </Text>
+                            </TouchableOpacity>
+                          );
+                        })}
+                      </View>
                     </View>
                   </View>
                 )}
@@ -638,6 +737,49 @@ export default function SchedulesScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* YEAR QUICK-PICKER OVERLAY */}
+      <Modal visible={isYearPickerOpen} animationType="fade" transparent onRequestClose={() => setIsYearPickerOpen(false)}>
+        <TouchableOpacity 
+          style={styles.yearPickerOverlay} 
+          activeOpacity={1} 
+          onPress={() => setIsYearPickerOpen(false)}
+        >
+          <View style={styles.yearPickerContent}>
+            <Text style={styles.yearPickerTitle}>Select Year</Text>
+            <ScrollView style={styles.yearPickerScroll} showsVerticalScrollIndicator={false}>
+              {years.map(year => {
+                const isSelected = currentMonth.getFullYear() === year;
+                return (
+                  <TouchableOpacity
+                    key={year}
+                    style={[
+                      styles.yearItem,
+                      isSelected && styles.yearItemSelected
+                    ]}
+                    onPress={() => handleSelectYear(year)}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={[
+                      styles.yearItemText,
+                      isSelected && styles.yearItemTextSelected
+                    ]}>
+                      {year}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* SETTINGS MODAL */}
+      <DataSettingsSheet
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+        onDataChange={loadOfflineData}
+      />
     </View>
   );
 }
@@ -656,6 +798,29 @@ const styles = StyleSheet.create({
     paddingTop: 16,
     paddingBottom: 100, // Margin aman agar tidak terpotong tab bar
   },
+  topHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  headerTitle: {
+    fontFamily: 'System',
+    fontSize: 24,
+    fontWeight: '800',
+    color: '#1E293B',
+  },
+  compactProfileButton: {
+    padding: 2,
+    borderRadius: 18,
+    borderWidth: 1.5,
+    borderColor: '#E2E8F0',
+  },
+  compactAvatar: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+  },
   monthHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -670,6 +835,31 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '700',
     color: '#333D53',
+  },
+  monthTitleText: {
+    fontFamily: 'System',
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#333D53',
+  },
+  yearPickerTrigger: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#EEF1F6',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+  },
+  yearTitleText: {
+    fontFamily: 'System',
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#333D53',
+  },
+  monthYearTitleContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
   calendarCard: {
     borderRadius: 20,
@@ -837,27 +1027,35 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   modalContent: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: 600,
     backgroundColor: '#FFFFFF',
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
-    paddingTop: 20,
-    paddingHorizontal: 20,
-    paddingBottom: Platform.OS === 'ios' ? 44 : 32,
-    maxHeight: '85%',
+    borderBottomLeftRadius: 0,
+    borderBottomRightRadius: 0,
+    paddingTop: 24,
+    paddingHorizontal: 24,
   },
   modalHeader: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
     paddingBottom: 16,
     borderBottomWidth: 1,
     borderBottomColor: '#F1F5F9',
+    gap: 8,
   },
   modalTitle: {
     fontFamily: 'System',
     fontSize: 16,
     fontWeight: '700',
     color: '#333D53',
+  },
+  backCloseButton: {
+    padding: 4,
   },
   closeModalButton: {
     width: 28,
@@ -869,6 +1067,7 @@ const styles = StyleSheet.create({
   },
   modalFormScroll: {
     paddingVertical: 12,
+    paddingBottom: 24,
   },
   modalForm: {
     gap: 12,
@@ -1063,5 +1262,97 @@ const styles = StyleSheet.create({
   pickerDayTextSelected: {
     color: '#FFFFFF',
     fontWeight: '700',
+  },
+  compactSettingsButton: {
+    padding: 6,
+    borderRadius: 12,
+    backgroundColor: '#EEF1F6',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  reminderInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginTop: 4,
+  },
+  unitChipsRow: {
+    flexDirection: 'row',
+    gap: 6,
+  },
+  unitChip: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  unitChipActive: {
+    backgroundColor: '#3A86FF',
+    borderColor: '#3A86FF',
+  },
+  unitChipInactive: {
+    backgroundColor: '#FFFFFF',
+    borderColor: '#E2E8F0',
+  },
+  unitChipText: {
+    fontFamily: 'System',
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  unitChipTextActive: {
+    color: '#FFFFFF',
+  },
+  unitChipTextInactive: {
+    color: '#64748B',
+  },
+  yearPickerOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.4)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  yearPickerContent: {
+    width: 200,
+    maxHeight: 300,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    paddingVertical: 16,
+    paddingHorizontal: 12,
+    shadowColor: '#333D53',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.15,
+    shadowRadius: 20,
+    elevation: 8,
+  },
+  yearPickerTitle: {
+    fontFamily: 'System',
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#333D53',
+    textAlign: 'center',
+    marginBottom: 12,
+  },
+  yearPickerScroll: {
+    flexGrow: 0,
+  },
+  yearItem: {
+    paddingVertical: 10,
+    alignItems: 'center',
+    borderRadius: 8,
+    marginVertical: 2,
+  },
+  yearItemSelected: {
+    backgroundColor: '#3A86FF',
+  },
+  yearItemText: {
+    fontFamily: 'System',
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#475569',
+  },
+  yearItemTextSelected: {
+    color: '#FFFFFF',
   },
 });
