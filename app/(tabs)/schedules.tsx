@@ -17,6 +17,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { getDatabase } from '@/core/database/sqlite';
 import DataSettingsSheet from '@/components/DataSettingsSheet';
 import { scheduleCalendarEventReminder } from '@/core/services/notificationService';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const MONTH_NAMES = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -33,6 +34,7 @@ interface Note {
 }
 
 export default function SchedulesScreen() {
+  const insets = useSafeAreaInsets();
   // Objek tanggal hari ini (Today) berdasarkan local device time
   const todayDateObj = useMemo(() => {
     const now = new Date();
@@ -377,25 +379,26 @@ export default function SchedulesScreen() {
 
   return (
     <View style={styles.screenWrapper}>
+      {/* SINKRONISASI HEADER ATAS */}
+      <View style={[styles.topHeader, { paddingTop: Math.max(insets.top, 32) }]}>
+        <Text style={styles.headerTitle}>Schedules</Text>
+        <TouchableOpacity 
+          style={styles.compactSettingsButton} 
+          activeOpacity={0.7}
+          onPress={() => setIsSettingsOpen(true)}
+        >
+          <Ionicons name="settings-outline" size={22} color="#1E293B" />
+        </TouchableOpacity>
+      </View>
+
       <ScrollView 
         style={styles.container}
         contentContainerStyle={[
           styles.scrollContent,
-          { paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight || 0) + 16 : 16 }
+          { paddingTop: Math.max(insets.top, 32) + 64 }
         ]}
         showsVerticalScrollIndicator={false}
       >
-        {/* SINKRONISASI HEADER ATAS */}
-        <View style={styles.topHeader}>
-          <Text style={styles.headerTitle}>Schedules</Text>
-          <TouchableOpacity 
-            style={styles.compactSettingsButton} 
-            activeOpacity={0.7}
-            onPress={() => setIsSettingsOpen(true)}
-          >
-            <Ionicons name="settings-outline" size={22} color="#1E293B" />
-          </TouchableOpacity>
-        </View>
 
         {/* HEADER BULAN DINAMIS DENGAN NAVIGASI */}
         <View style={styles.monthHeader}>
@@ -528,7 +531,13 @@ export default function SchedulesScreen() {
         <View style={styles.modalOverlay}>
           <KeyboardAvoidingView
             behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-            style={styles.modalContent}
+            style={[
+              styles.modalContent,
+              {
+                paddingTop: Math.max(insets.top, 32),
+                paddingBottom: Math.max(insets.bottom, 32),
+              }
+            ]}
           >
             <View style={styles.modalHeader}>
               <TouchableOpacity 
@@ -546,8 +555,6 @@ export default function SchedulesScreen() {
 
             <ScrollView 
               showsVerticalScrollIndicator={false} 
-              scrollEnabled={false} 
-              style={{ overflow: 'hidden' }} 
               contentContainerStyle={styles.modalFormScroll}
             >
               <View style={styles.modalForm}>
@@ -799,10 +806,19 @@ const styles = StyleSheet.create({
     paddingBottom: 100, // Margin aman agar tidak terpotong tab bar
   },
   topHeader: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 100,
+    backgroundColor: '#FFFFFF',
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 20,
+    paddingHorizontal: 20,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F5F9',
   },
   headerTitle: {
     fontFamily: 'System',
@@ -1037,7 +1053,6 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 28,
     borderBottomLeftRadius: 0,
     borderBottomRightRadius: 0,
-    paddingTop: 24,
     paddingHorizontal: 24,
   },
   modalHeader: {
@@ -1067,7 +1082,7 @@ const styles = StyleSheet.create({
   },
   modalFormScroll: {
     paddingVertical: 12,
-    paddingBottom: 24,
+    paddingBottom: 40,
   },
   modalForm: {
     gap: 12,

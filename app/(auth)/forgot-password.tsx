@@ -114,12 +114,7 @@ export default function ForgotPasswordScreen() {
     <>
       <Stack.Screen options={{ headerShown: false }} />
       <View style={[styles.container, { paddingTop: Math.max(insets.top, 8) }]}>
-        {/* Asset Image Background */}
-        <Image
-          source={require('../../assets/images/BackgroundMB.png')}
-          style={styles.backgroundImage}
-          resizeMode="cover"
-        />
+        {/* Background Image Deactivated */}
 
         <KeyboardAvoidingView
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}

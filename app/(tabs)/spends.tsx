@@ -919,11 +919,11 @@ export default function SpendsScreen() {
   return (
     <View style={[
       styles.container,
-      { paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight || 0) + 16 : 16 }
+      { paddingTop: Math.max(insets.top, 16) + 64 }
     ]}>
 
       {/* SINKRONISASI HEADER ATAS */}
-      <View style={styles.topHeader}>
+      <View style={[styles.topHeader, { paddingTop: Math.max(insets.top, 16) }]}>
         <Text style={styles.headerTitle}>Spends</Text>
         <TouchableOpacity 
           style={styles.compactSettingsButton} 
@@ -1646,11 +1646,19 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
   },
   topHeader: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 100,
+    backgroundColor: '#FFFFFF',
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 20,
-    marginBottom: 16,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F5F9',
   },
   headerTitle: {
     fontFamily: 'System',

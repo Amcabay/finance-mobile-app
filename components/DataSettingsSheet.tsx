@@ -81,25 +81,32 @@ export default function DataSettingsSheet({ isOpen, onClose, onDataChange }: Dat
 
       txs.forEach((tx: any) => {
         const row = [
-          tx.id,
-          tx.user_id,
-          `"${(tx.description || '').replace(/"/g, '""')}"`,
-          tx.amount,
-          `"${tx.category}"`,
-          `"${tx.type}"`,
-          `"${tx.date}"`,
-          `"${tx.sync_status}"`,
-          `"${tx.account_id || ''}"`
+          tx.id !== null && tx.id !== undefined ? String(tx.id) : '',
+          tx.user_id !== null && tx.user_id !== undefined ? String(tx.user_id) : '',
+          `"${String(tx.description || '').replace(/"/g, '""')}"`,
+          tx.amount !== null && tx.amount !== undefined ? String(tx.amount) : '0',
+          `"${tx.category !== null && tx.category !== undefined ? String(tx.category).replace(/"/g, '""') : ''}"`,
+          `"${tx.type !== null && tx.type !== undefined ? String(tx.type).replace(/"/g, '""') : ''}"`,
+          `"${tx.date !== null && tx.date !== undefined ? String(tx.date).replace(/"/g, '""') : ''}"`,
+          `"${tx.sync_status !== null && tx.sync_status !== undefined ? String(tx.sync_status).replace(/"/g, '""') : ''}"`,
+          `"${tx.account_id !== null && tx.account_id !== undefined ? String(tx.account_id).replace(/"/g, '""') : ''}"`
         ];
         csvContent += row.join(',') + '\n';
       });
 
-      const fileUri = (FileSystem as any).cacheDirectory + 'finance_flow_transactions.csv';
-      await (FileSystem as any).writeAsStringAsync(fileUri, csvContent, {
-        encoding: (FileSystem as any).EncodingType.UTF8,
+      const fs = FileSystem as any;
+      const directory = fs.cacheDirectory || fs.documentDirectory;
+      if (!directory) {
+        throw new Error('Local file system directory is unavailable.');
+      }
+      const fileUri = `${directory}finance_flow_transactions.csv`;
+
+      await fs.writeAsStringAsync(fileUri, csvContent, {
+        encoding: fs.EncodingType.UTF8,
       });
 
-      if (await Sharing.isAvailableAsync()) {
+      const isSharingAvailable = await Sharing.isAvailableAsync();
+      if (isSharingAvailable) {
         await Sharing.shareAsync(fileUri, {
           mimeType: 'text/csv',
           dialogTitle: 'Export Transaction Ledger',
@@ -110,7 +117,7 @@ export default function DataSettingsSheet({ isOpen, onClose, onDataChange }: Dat
       }
     } catch (error) {
       console.error('Failed to export CSV:', error);
-      Alert.alert('Error', 'An error occurred during the CSV serialization or sharing process.');
+      Alert.alert('Export Failed', 'An error occurred during the CSV serialization or sharing process.');
     }
   };
 

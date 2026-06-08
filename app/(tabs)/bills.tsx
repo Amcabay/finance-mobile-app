@@ -21,6 +21,7 @@ import { formatIDR } from '@/core/formatters/currency';
 import { getDatabase } from '@/core/database/sqlite';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import DataSettingsSheet from '@/components/DataSettingsSheet';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const billRepository = new BillRepository();
 
@@ -42,6 +43,7 @@ const formatDateString = (dateStr: string) => {
 };
 
 export default function BillsScreen() {
+  const insets = useSafeAreaInsets();
   const [loading, setLoading] = useState(true);
   const [bills, setBills] = useState<any[]>([]);
   const [isAdding, setIsAdding] = useState(false);
@@ -489,25 +491,26 @@ export default function BillsScreen() {
 
   return (
     <View style={styles.screenWrapper}>
+      {/* SINKRONISASI HEADER ATAS */}
+      <View style={[styles.topHeader, { paddingTop: Math.max(insets.top, 16) }]}>
+        <Text style={styles.headerTitle}>Bills</Text>
+        <TouchableOpacity 
+          style={styles.compactSettingsButton} 
+          activeOpacity={0.7}
+          onPress={() => setIsSettingsOpen(true)}
+        >
+          <Ionicons name="settings-outline" size={22} color="#1E293B" />
+        </TouchableOpacity>
+      </View>
+
       <ScrollView
         style={styles.container}
         contentContainerStyle={[
           styles.scrollContent,
-          { paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight || 0) + 16 : 16 }
+          { paddingTop: Math.max(insets.top, 16) + 64 }
         ]}
         showsVerticalScrollIndicator={false}
       >
-        {/* SINKRONISASI HEADER ATAS */}
-        <View style={styles.topHeader}>
-          <Text style={styles.headerTitle}>Bills</Text>
-          <TouchableOpacity 
-            style={styles.compactSettingsButton} 
-            activeOpacity={0.7}
-            onPress={() => setIsSettingsOpen(true)}
-          >
-            <Ionicons name="settings-outline" size={22} color="#1E293B" />
-          </TouchableOpacity>
-        </View>
 
         {/* LOGIKA SMART STATUS CARD (WELCOME BACK) DENGAN KONDISI HIDE SAAT SEE ALL */}
         {!isSeeAllActive && (
@@ -1197,10 +1200,19 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
   },
   topHeader: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 100,
+    backgroundColor: '#FFFFFF',
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 20,
+    paddingHorizontal: 20,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F5F9',
   },
   headerTitle: {
     fontFamily: 'System',

@@ -23,6 +23,7 @@ import {
 } from 'react-native';
 import Svg, { Circle, G } from 'react-native-svg';
 import DataSettingsSheet from '@/components/DataSettingsSheet';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const { width: screenWidth } = Dimensions.get('window');
 
@@ -46,7 +47,13 @@ const CATEGORY_COLORS: Record<string, string> = {
   others: '#90A4AE',
 };
 
+const formatThousandsSeparator = (value: string) => {
+  const cleanValue = value.replace(/\D/g, '');
+  return cleanValue ? Number(cleanValue).toLocaleString('id-ID') : '';
+};
+
 export default function DashboardScreen() {
+  const insets = useSafeAreaInsets();
   const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -116,8 +123,9 @@ export default function DashboardScreen() {
       setTotalOutcome(sumOutcome);
 
       // 2. DINAMISASI DAILY LIMITS & PROGRESS METER (Hari ini saja)
+      // Exclude bills category from daily limits
       const todayRows = await db.getAllAsync<any>(
-        "SELECT SUM(amount) AS total FROM transactions WHERE user_id = ? AND type = 'expense' AND date = ?",
+        "SELECT SUM(amount) AS total FROM transactions WHERE user_id = ? AND type = 'expense' AND date = ? AND category != 'Bills'",
         ['offline-user', todayStr]
       );
       setSpentToday(todayRows[0]?.total || 0);
@@ -229,7 +237,7 @@ export default function DashboardScreen() {
 
   // Save/Persist budget limit change into SQLite
   const handleSaveDailyLimit = async () => {
-    const rawLimit = parseFloat(newLimitInput);
+    const rawLimit = parseFloat(newLimitInput.replace(/\./g, ''));
     if (isNaN(rawLimit) || rawLimit <= 0) {
       Alert.alert('Error', 'Please enter a valid daily limit amount');
       return;
@@ -315,28 +323,29 @@ export default function DashboardScreen() {
 
   return (
     <View style={styles.screenContainer}>
+      {/* HEADER SECTION */}
+      <View style={[styles.header, { paddingTop: Math.max(insets.top, 16) }]}>
+        <Text style={styles.headerTitle}>Overview</Text>
+        <TouchableOpacity 
+          style={styles.compactSettingsButton} 
+          activeOpacity={0.7}
+          onPress={() => setIsSettingsOpen(true)}
+        >
+          <Ionicons name="settings-outline" size={22} color="#1E293B" />
+        </TouchableOpacity>
+      </View>
+
       <ScrollView
         style={styles.container}
         contentContainerStyle={[
           styles.scrollContent,
-          { paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight || 0) + 16 : 16 }
+          { paddingTop: Math.max(insets.top, 16) + 64 }
         ]}
         showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#2F95F6" />
         }
       >
-        {/* HEADER SECTION */}
-        <View style={styles.header}>
-          <Text style={styles.headerTitle}>Overview</Text>
-          <TouchableOpacity 
-            style={styles.compactSettingsButton} 
-            activeOpacity={0.7}
-            onPress={() => setIsSettingsOpen(true)}
-          >
-            <Ionicons name="settings-outline" size={22} color="#1E293B" />
-          </TouchableOpacity>
-        </View>
 
         {/* TOTAL WEALTH CARD */}
         <View style={styles.wealthCard}>
@@ -486,17 +495,13 @@ export default function DashboardScreen() {
         <View style={styles.limitsCard}>
           <View style={styles.limitsHeader}>
             <View>
-              <Text style={styles.limitsTitle}>Daily Limits</Text>
-              <TouchableOpacity style={styles.dropdownTrigger} activeOpacity={0.7}>
-                <Text style={styles.dropdownText}>By weeks</Text>
-                <Ionicons name="chevron-down" size={10} color="#2F95F6" style={{ marginLeft: 2 }} />
-              </TouchableOpacity>
+              <Text style={styles.limitsTitle}>Today's Limit</Text>
             </View>
             <TouchableOpacity 
               style={styles.editLimitButton} 
               activeOpacity={0.8}
               onPress={() => {
-                setNewLimitInput(String(dailyLimit));
+                setNewLimitInput(formatThousandsSeparator(String(dailyLimit)));
                 setIsLimitModalOpen(true);
               }}
             >
@@ -537,7 +542,7 @@ export default function DashboardScreen() {
             style={styles.modalContent}
           >
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Edit Daily Limit</Text>
+              <Text style={styles.modalTitle}>Edit Today's Limit</Text>
               <TouchableOpacity 
                 onPress={() => setIsLimitModalOpen(false)} 
                 style={styles.closeModalButton}
@@ -551,11 +556,11 @@ export default function DashboardScreen() {
               <View style={styles.capsuleInputWrapper}>
                 <TextInput
                   style={styles.capsuleInput}
-                  placeholder="Daily Limit (IDR)"
+                  placeholder="Today's Limit (IDR)"
                   placeholderTextColor="#94A3B8"
                   keyboardType="numeric"
                   value={newLimitInput}
-                  onChangeText={setNewLimitInput}
+                  onChangeText={(text) => setNewLimitInput(formatThousandsSeparator(text))}
                 />
               </View>
 
@@ -601,10 +606,19 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
   },
   header: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 100,
+    backgroundColor: '#FFFFFF',
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 24,
+    paddingHorizontal: 20,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F5F9',
   },
   headerTitle: {
     fontFamily: 'System',
